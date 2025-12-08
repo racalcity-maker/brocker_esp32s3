@@ -1,1 +1,0 @@
-warning: user value 4 on the int symbol LWIP_TCP_RECVMBOX_SIZE (defined at C:/Espressif/frameworks/esp-idf-v5.3.3/components/lwip/Kconfig:661) ignored due to being outside the active range ([6, 64]) -- falling back on defaults

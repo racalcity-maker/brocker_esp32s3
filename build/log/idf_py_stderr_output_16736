@@ -1,1 +1,0 @@
-ninja: error: 'C:/Users/test/Documents/Arduino/zal/brocker/components/audio_player/third_party/helix/bitstream.c', needed by 'esp-idf/audio_player/CMakeFiles/__idf_audio_player.dir/third_party/helix/bitstream.c.obj', missing and no known rule to make it

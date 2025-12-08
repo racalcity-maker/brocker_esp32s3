@@ -1,0 +1,22 @@
+# Build
+build/
+cmake-build-*/
+dist/
+
+# ESP-IDF
+sdkconfig.old
+*.bin
+*.elf
+*.map
+
+# VS Code / IDE
+.vscode/
+.idea/
+
+# Python кеши (если есть скрипты)
+__pycache__/
+*.pyc
+
+# OS мусор
+.DS_Store
+Thumbs.db

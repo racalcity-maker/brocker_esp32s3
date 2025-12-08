@@ -1,18 +1,0 @@
-[1/11] Building C object esp-idf/web_ui/CMakeFiles/__idf_web_ui.dir/web_ui_page.c.obj
-[2/11] Performing build step for 'bootloader'
-[1/1] C:\Windows\system32\cmd.exe /C "cd /D C:\Users\test\Documents\Arduino\zal\brocker\build\bootloader\esp-idf\esptool_py && C:\Espressif\python_env\idf5.3_py3.11_env\Scripts\python.exe C:/Espressif/frameworks/esp-idf-v5.3.3/components/partition_table/check_sizes.py --offset 0x8000 bootloader 0x0 C:/Users/test/Documents/Arduino/zal/brocker/build/bootloader/bootloader.bin"
-Bootloader binary size 0x5490 bytes. 0x2b70 bytes (34%) free.
-[3/11] No install step for 'bootloader'
-[4/11] Linking C static library esp-idf\web_ui\libweb_ui.a
-[5/11] Completed 'bootloader'
-[6/11] Linking C static library esp-idf\main\libmain.a
-[7/11] Generating ld/sections.ld
-[8/11] Linking CXX executable brocker.elf
-FAILED: brocker.elf 
-C:\Windows\system32\cmd.exe /C "cd . && C:\Espressif\tools\xtensa-esp-elf\esp-13.2.0_20240530\xtensa-esp-elf\bin\xtensa-esp32s3-elf-g++.exe -mlongcalls  -fno-builtin-memcpy -fno-builtin-memset -fno-builtin-bzero -fno-builtin-stpcpy -fno-builtin-strncpy -Wl,--cref -Wl,--defsym=IDF_TARGET_ESP32S3=0 -Wl,--Map=C:/Users/test/Documents/Arduino/zal/brocker/build/brocker.map -Wl,--no-warn-rwx-segments -fno-rtti -fno-lto -Wl,--gc-sections -Wl,--warn-common -T esp32s3.peripherals.ld -T esp32s3.rom.ld -T esp32s3.rom.api.ld -T esp32s3.rom.bt_funcs.ld -T esp32s3.rom.libgcc.ld -T esp32s3.rom.wdt.ld -T esp32s3.rom.version.ld -T esp32s3.rom.newlib.ld -T memory.ld -T sections.ld @CMakeFiles\brocker.elf.rsp -o brocker.elf && cd ."
-C:/Espressif/tools/xtensa-esp-elf/esp-13.2.0_20240530/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/13.2.0/../../../../xtensa-esp-elf/bin/ld.exe: esp-idf/web_ui/libweb_ui.a(web_ui_devices.c.obj):(.literal.devices_js_handler+0x4): undefined reference to `_binary_assets_devices_wizard_js_end'
-C:/Espressif/tools/xtensa-esp-elf/esp-13.2.0_20240530/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/13.2.0/../../../../xtensa-esp-elf/bin/ld.exe: esp-idf/web_ui/libweb_ui.a(web_ui_devices.c.obj):(.literal.devices_js_handler+0x8): undefined reference to `_binary_assets_devices_wizard_js_start'
-C:/Espressif/tools/xtensa-esp-elf/esp-13.2.0_20240530/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/13.2.0/../../../../xtensa-esp-elf/bin/ld.exe: esp-idf/web_ui/libweb_ui.a(web_ui_devices.c.obj):(.literal.devices_css_handler+0x4): undefined reference to `_binary_assets_devices_wizard_css_end'
-C:/Espressif/tools/xtensa-esp-elf/esp-13.2.0_20240530/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/13.2.0/../../../../xtensa-esp-elf/bin/ld.exe: esp-idf/web_ui/libweb_ui.a(web_ui_devices.c.obj):(.literal.devices_css_handler+0x8): undefined reference to `_binary_assets_devices_wizard_css_start'
-collect2.exe: error: ld returned 1 exit status
-ninja: build stopped: subcommand failed.
