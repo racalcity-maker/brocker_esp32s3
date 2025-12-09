@@ -14,6 +14,8 @@
 #include "esp_random.h"
 #include "esp_check.h"
 #include "nvs.h"
+#include "automation_engine.h"
+#include "device_manager.h"
 #include "mqtt_core.h"
 #include "audio_player.h"
 
@@ -48,6 +50,8 @@ static esp_timer_handle_t s_laser_timeout;
 static char s_robot_tracks[LASER_ROBOT_MAX_TRACKS][96];
 static int s_robot_track_count;
 static bool s_robot_scanned;
+
+static void laser_trigger_actions(const char *track);
 
 static void laser_lock(void)
 {
@@ -210,14 +214,15 @@ static void laser_trigger_relay(void)
 {
     s_relay_triggered = true;
     s_hold_completed = true;
-    ESP_LOGI(TAG, "relay trigger: publishing relay/relayOn and robot/laser/relayOn.mp3");
-    mqtt_core_publish("relay/relayOn", "on");
-    mqtt_core_publish("robot/laser/relayOn.mp3", "/sdcard/laser/relayOn.mp3");
+    ESP_LOGI(TAG, "relay trigger: executing laser scenario");
     audio_player_stop();
     s_laser_playing = false;
     if (s_laser_cfg.track_relay[0]) {
-        audio_player_play(s_laser_cfg.track_relay);
+        automation_engine_set_variable("laser.result_track", s_laser_cfg.track_relay);
+    } else {
+        automation_engine_clear_variable("laser.result_track");
     }
+    laser_trigger_actions(s_laser_cfg.track_relay);
 }
 
 static void laser_maybe_send_robot(int64_t now)
@@ -280,6 +285,26 @@ static void laser_maybe_trigger_relay(void)
     int64_t base_ms = s_laser_cfg.cumulative ? s_hold_total_ms : s_hold_streak_ms;
     if (s_laser_cfg.hold_seconds > 0 && base_ms >= ((int64_t)s_laser_cfg.hold_seconds) * 1000) {
         laser_trigger_relay();
+    }
+}
+
+static void laser_run_fallback(const char *track)
+{
+    mqtt_core_publish("relay/relayOn", "on");
+    mqtt_core_publish("robot/laser/relayOn.mp3", track && track[0] ? track : "/sdcard/laser/relayOn.mp3");
+    if (track && track[0]) {
+        audio_player_play(track);
+    }
+}
+
+static void laser_trigger_actions(const char *track)
+{
+    ESP_LOGI(TAG, "relay trigger -> scenario %s", DEVICE_MANAGER_SCENARIO_LASER_TRIGGER);
+    esp_err_t err = automation_engine_trigger(DEVICE_MANAGER_DEVICE_ID_LASER,
+                                              DEVICE_MANAGER_SCENARIO_LASER_TRIGGER);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "automation trigger failed for laser (%s), fallback", esp_err_to_name(err));
+        laser_run_fallback(track);
     }
 }
 
@@ -409,6 +434,7 @@ static esp_err_t laser_save_handler(httpd_req_t *req)
     if (err != ESP_OK) {
         return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "nvs save failed");
     }
+    device_manager_update_laser_relay_track(s_laser_cfg.track_relay);
     return web_ui_send_ok(req, "text/plain", "laser saved");
 }
 
@@ -456,6 +482,7 @@ esp_err_t web_ui_laser_register(httpd_handle_t server)
 esp_err_t web_ui_laser_init(void)
 {
     laser_load(&s_laser_cfg);
+    device_manager_update_laser_relay_track(s_laser_cfg.track_relay);
     if (!s_laser_mutex) {
         s_laser_mutex = xSemaphoreCreateMutex();
     }

@@ -4,6 +4,7 @@
 #include <strings.h>
 #include <stdint.h>
 #include <inttypes.h>
+#include <ctype.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
@@ -23,6 +24,9 @@
 #define AUTOMATION_FLAG_CAPACITY (DEVICE_MANAGER_MAX_DEVICES * DEVICE_MANAGER_MAX_SCENARIOS_PER_DEVICE)
 #define AUTOMATION_RELOAD_LOCK_TIMEOUT pdMS_TO_TICKS(200)
 #define AUTOMATION_TRIGGER_CAPACITY (DEVICE_MANAGER_MAX_DEVICES * DEVICE_MANAGER_MAX_TOPICS_PER_DEVICE)
+#define AUTOMATION_CONTEXT_MAX_VARS 32
+#define AUTOMATION_CONTEXT_KEY_MAX 48
+#define AUTOMATION_CONTEXT_VALUE_MAX 192
 
 typedef struct {
     char topic[DEVICE_MANAGER_TOPIC_MAX_LEN];
@@ -49,6 +53,15 @@ static QueueHandle_t s_job_queue = NULL;
 static automation_flag_t s_flags[AUTOMATION_FLAG_CAPACITY];
 static SemaphoreHandle_t s_flag_mutex = NULL;
 static TaskHandle_t s_worker = NULL;
+static SemaphoreHandle_t s_context_mutex = NULL;
+
+typedef struct {
+    bool in_use;
+    char key[AUTOMATION_CONTEXT_KEY_MAX];
+    char value[AUTOMATION_CONTEXT_VALUE_MAX];
+} automation_context_var_t;
+
+static automation_context_var_t s_context_vars[AUTOMATION_CONTEXT_MAX_VARS];
 
 typedef struct {
     const char *name;
@@ -73,6 +86,10 @@ static void automation_handle_event(const event_bus_message_t *msg);
 static event_bus_type_t event_name_to_type(const char *name);
 static const device_descriptor_t *find_device_by_id(const char *id);
 static const device_scenario_t *find_scenario_by_id(const device_descriptor_t *device, const char *id);
+static void automation_context_set_internal(const char *key, const char *value);
+static void automation_context_clear_internal(const char *key);
+static size_t automation_context_lookup(const char *key, char *out, size_t out_len);
+static void automation_render_template(const char *src, char *dst, size_t dst_len);
 
 static void automation_set_flag(const char *name, bool value)
 {
@@ -247,6 +264,9 @@ esp_err_t automation_engine_init(void)
     if (!s_flag_mutex) {
         s_flag_mutex = xSemaphoreCreateMutex();
     }
+    if (!s_context_mutex) {
+        s_context_mutex = xSemaphoreCreateMutex();
+    }
     if (!s_job_queue) {
         s_job_queue = xQueueCreate(AUTOMATION_QUEUE_LENGTH, sizeof(automation_job_t));
     }
@@ -407,12 +427,26 @@ static void automation_execute_job(const automation_job_t *job)
         switch (step->type) {
         case DEVICE_ACTION_MQTT_PUBLISH:
             if (step->data.mqtt.topic[0]) {
-                mqtt_core_publish(step->data.mqtt.topic, step->data.mqtt.payload);
+                char topic[DEVICE_MANAGER_TOPIC_MAX_LEN];
+                char payload[DEVICE_MANAGER_PAYLOAD_MAX_LEN];
+                automation_render_template(step->data.mqtt.topic, topic, sizeof(topic));
+                automation_render_template(step->data.mqtt.payload, payload, sizeof(payload));
+                if (topic[0]) {
+                    mqtt_core_publish(topic, payload);
+                } else {
+                    ESP_LOGW(TAG, "mqtt_publish skipped (empty topic)");
+                }
             }
             break;
         case DEVICE_ACTION_AUDIO_PLAY:
             if (step->data.audio.track[0]) {
-                audio_player_play(step->data.audio.track);
+                char track[DEVICE_MANAGER_TRACK_NAME_MAX_LEN];
+                automation_render_template(step->data.audio.track, track, sizeof(track));
+                if (track[0]) {
+                    audio_player_play(track);
+                } else {
+                    ESP_LOGW(TAG, "audio_play skipped (empty track)");
+                }
             }
             break;
         case DEVICE_ACTION_AUDIO_STOP:
@@ -456,10 +490,10 @@ static void automation_execute_job(const automation_job_t *job)
                 .type = type,
             };
             if (step->data.event.topic[0]) {
-                strncpy(msg.topic, step->data.event.topic, sizeof(msg.topic) - 1);
+                automation_render_template(step->data.event.topic, msg.topic, sizeof(msg.topic));
             }
             if (step->data.event.payload[0]) {
-                strncpy(msg.payload, step->data.event.payload, sizeof(msg.payload) - 1);
+                automation_render_template(step->data.event.payload, msg.payload, sizeof(msg.payload));
             }
             event_bus_post(&msg, pdMS_TO_TICKS(50));
             break;
@@ -481,4 +515,167 @@ static void automation_handle_event(const event_bus_message_t *msg)
     if (msg->type == EVENT_DEVICE_CONFIG_CHANGED) {
         automation_engine_reload();
     }
+}
+
+static void ctx_str_copy(char *dst, size_t dst_len, const char *src)
+{
+    if (!dst || dst_len == 0) {
+        return;
+    }
+    if (!src) {
+        dst[0] = 0;
+        return;
+    }
+    size_t i = 0;
+    for (; i < dst_len - 1 && src[i]; ++i) {
+        dst[i] = src[i];
+    }
+    dst[i] = 0;
+}
+
+static void automation_context_set_internal(const char *key, const char *value)
+{
+    if (!key || !key[0] || !s_context_mutex) {
+        return;
+    }
+    if (!value || !value[0]) {
+        automation_context_clear_internal(key);
+        return;
+    }
+    xSemaphoreTake(s_context_mutex, portMAX_DELAY);
+    automation_context_var_t *slot = NULL;
+    for (size_t i = 0; i < AUTOMATION_CONTEXT_MAX_VARS; ++i) {
+        automation_context_var_t *var = &s_context_vars[i];
+        if (var->in_use && strcasecmp(var->key, key) == 0) {
+            slot = var;
+            break;
+        }
+        if (!var->in_use && !slot) {
+            slot = var;
+        }
+    }
+    if (slot) {
+        slot->in_use = true;
+        ctx_str_copy(slot->key, sizeof(slot->key), key);
+        ctx_str_copy(slot->value, sizeof(slot->value), value);
+        ESP_LOGI(TAG, "context %s='%s'", slot->key, slot->value);
+    } else {
+        ESP_LOGW(TAG, "context full, cannot set %s", key);
+    }
+    xSemaphoreGive(s_context_mutex);
+}
+
+static void automation_context_clear_internal(const char *key)
+{
+    if (!key || !key[0] || !s_context_mutex) {
+        return;
+    }
+    xSemaphoreTake(s_context_mutex, portMAX_DELAY);
+    for (size_t i = 0; i < AUTOMATION_CONTEXT_MAX_VARS; ++i) {
+        automation_context_var_t *var = &s_context_vars[i];
+        if (var->in_use && strcasecmp(var->key, key) == 0) {
+            var->in_use = false;
+            var->key[0] = 0;
+            var->value[0] = 0;
+            ESP_LOGI(TAG, "context %s cleared", key);
+            break;
+        }
+    }
+    xSemaphoreGive(s_context_mutex);
+}
+
+static size_t automation_context_lookup(const char *key, char *out, size_t out_len)
+{
+    if (!out || out_len == 0) {
+        return 0;
+    }
+    out[0] = 0;
+    if (!key || !key[0] || !s_context_mutex) {
+        return 0;
+    }
+    size_t len = 0;
+    xSemaphoreTake(s_context_mutex, portMAX_DELAY);
+    for (size_t i = 0; i < AUTOMATION_CONTEXT_MAX_VARS; ++i) {
+        automation_context_var_t *var = &s_context_vars[i];
+        if (var->in_use && strcasecmp(var->key, key) == 0) {
+            ctx_str_copy(out, out_len, var->value);
+            len = strlen(out);
+            break;
+        }
+    }
+    xSemaphoreGive(s_context_mutex);
+    return len;
+}
+
+static void automation_render_template(const char *src, char *dst, size_t dst_len)
+{
+    if (!dst || dst_len == 0) {
+        return;
+    }
+    dst[0] = 0;
+    if (!src) {
+        return;
+    }
+    size_t out_len = 0;
+    size_t i = 0;
+    while (src[i] && out_len < dst_len - 1) {
+        if (src[i] == '{' && src[i + 1] == '{') {
+            size_t j = i + 2;
+            while (src[j] && !(src[j] == '}' && src[j + 1] == '}')) {
+                j++;
+            }
+            if (!src[j]) {
+                // unmatched braces, copy rest literally
+                while (src[i] && out_len < dst_len - 1) {
+                    dst[out_len++] = src[i++];
+                }
+                break;
+            }
+            size_t start = i + 2;
+            size_t end = j;
+            while (start < end && isspace((unsigned char)src[start])) {
+                start++;
+            }
+            while (end > start && isspace((unsigned char)src[end - 1])) {
+                end--;
+            }
+            size_t key_len = end > start ? (end - start) : 0;
+            char key[AUTOMATION_CONTEXT_KEY_MAX];
+            if (key_len >= sizeof(key)) {
+                key_len = sizeof(key) - 1;
+            }
+            memcpy(key, src + start, key_len);
+            key[key_len] = 0;
+            char value_buf[AUTOMATION_CONTEXT_VALUE_MAX];
+            size_t val_len = automation_context_lookup(key, value_buf, sizeof(value_buf));
+            if (val_len == 0) {
+                size_t placeholder_len = j + 2 - i;
+                if (placeholder_len >= dst_len - out_len) {
+                    placeholder_len = dst_len - out_len - 1;
+                }
+                memcpy(dst + out_len, src + i, placeholder_len);
+                out_len += placeholder_len;
+            } else {
+                if (val_len >= dst_len - out_len) {
+                    val_len = dst_len - out_len - 1;
+                }
+                memcpy(dst + out_len, value_buf, val_len);
+                out_len += val_len;
+            }
+            i = j + 2;
+        } else {
+            dst[out_len++] = src[i++];
+        }
+    }
+    dst[out_len] = 0;
+}
+
+void automation_engine_set_variable(const char *key, const char *value)
+{
+    automation_context_set_internal(key, value);
+}
+
+void automation_engine_clear_variable(const char *key)
+{
+    automation_context_clear_internal(key);
 }

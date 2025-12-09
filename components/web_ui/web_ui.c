@@ -36,6 +36,19 @@ static const char *TAG = "web_ui";
 static httpd_handle_t s_server = NULL;
 static SemaphoreHandle_t s_scan_mutex = NULL;
 
+typedef struct {
+    const char *key;
+    const char *label;
+    const char *type;
+    const char *description;
+} device_variable_desc_t;
+
+static const device_variable_desc_t k_device_variables[] = {
+    {"pictures.result_state", "Pictures result state", "string", "Either 'ok' or 'fail' after verification"},
+    {"pictures.result_track", "Pictures result track", "string", "Audio track used for current pictures result"},
+    {"laser.result_track", "Laser relay track", "string", "Audio track triggered when laser completes hold"},
+};
+
 
 static esp_err_t ping_handler(httpd_req_t *req)
 {
@@ -191,7 +204,13 @@ static esp_err_t devices_config_handler(httpd_req_t *req)
 {
     char *json = NULL;
     size_t len = 0;
-    esp_err_t err = device_manager_export_json(&json, &len);
+    char query[128];
+    char profile[DEVICE_MANAGER_ID_MAX_LEN] = {0};
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK) {
+        httpd_query_key_value(query, "profile", profile, sizeof(profile));
+    }
+    esp_err_t err = profile[0] ? device_manager_export_profile_json(profile, &json, &len)
+                               : device_manager_export_json(&json, &len);
     if (err != ESP_OK || !json) {
         return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "device config unavailable");
     }
@@ -224,7 +243,12 @@ static esp_err_t devices_apply_handler(httpd_req_t *req)
         received += (size_t)r;
     }
     body[len] = 0;
-    esp_err_t err = device_manager_apply_json(body, len);
+    char query[128];
+    char profile[DEVICE_MANAGER_ID_MAX_LEN] = {0};
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK) {
+        httpd_query_key_value(query, "profile", profile, sizeof(profile));
+    }
+    esp_err_t err = device_manager_apply_profile_json(profile[0] ? profile : NULL, body, len);
     heap_caps_free(body);
     if (err != ESP_OK) {
         return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, esp_err_to_name(err));
@@ -250,6 +274,103 @@ static esp_err_t devices_run_handler(httpd_req_t *req)
         return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, esp_err_to_name(err));
     }
     return web_ui_send_ok(req, "application/json", "{\"status\":\"queued\"}");
+}
+
+static esp_err_t devices_profile_create_handler(httpd_req_t *req)
+{
+    char query[256];
+    char id[DEVICE_MANAGER_ID_MAX_LEN] = {0};
+    char name[DEVICE_MANAGER_NAME_MAX_LEN] = {0};
+    char clone[DEVICE_MANAGER_ID_MAX_LEN] = {0};
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK) {
+        httpd_query_key_value(query, "id", id, sizeof(id));
+        httpd_query_key_value(query, "name", name, sizeof(name));
+        httpd_query_key_value(query, "clone", clone, sizeof(clone));
+    }
+    if (!id[0]) {
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "id required");
+    }
+    esp_err_t err = device_manager_profile_create(id, name[0] ? name : NULL, clone[0] ? clone : NULL);
+    if (err != ESP_OK) {
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, esp_err_to_name(err));
+    }
+    return web_ui_send_ok(req, "application/json", "{\"status\":\"ok\"}");
+}
+
+static esp_err_t devices_profile_delete_handler(httpd_req_t *req)
+{
+    char query[128];
+    char id[DEVICE_MANAGER_ID_MAX_LEN] = {0};
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK) {
+        httpd_query_key_value(query, "id", id, sizeof(id));
+    }
+    if (!id[0]) {
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "id required");
+    }
+    esp_err_t err = device_manager_profile_delete(id);
+    if (err != ESP_OK) {
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, esp_err_to_name(err));
+    }
+    return web_ui_send_ok(req, "application/json", "{\"status\":\"ok\"}");
+}
+
+static esp_err_t devices_profile_rename_handler(httpd_req_t *req)
+{
+    char query[256];
+    char id[DEVICE_MANAGER_ID_MAX_LEN] = {0};
+    char name[DEVICE_MANAGER_NAME_MAX_LEN] = {0};
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK) {
+        httpd_query_key_value(query, "id", id, sizeof(id));
+        httpd_query_key_value(query, "name", name, sizeof(name));
+    }
+    if (!id[0] || !name[0]) {
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "id/name required");
+    }
+    esp_err_t err = device_manager_profile_rename(id, name);
+    if (err != ESP_OK) {
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, esp_err_to_name(err));
+    }
+    return web_ui_send_ok(req, "application/json", "{\"status\":\"ok\"}");
+}
+
+static esp_err_t devices_profile_activate_handler(httpd_req_t *req)
+{
+    char query[128];
+    char id[DEVICE_MANAGER_ID_MAX_LEN] = {0};
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK) {
+        httpd_query_key_value(query, "id", id, sizeof(id));
+    }
+    if (!id[0]) {
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "id required");
+    }
+    esp_err_t err = device_manager_profile_activate(id);
+    if (err != ESP_OK) {
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, esp_err_to_name(err));
+    }
+    return web_ui_send_ok(req, "application/json", "{\"status\":\"ok\"}");
+}
+
+static esp_err_t devices_variables_handler(httpd_req_t *req)
+{
+    httpd_resp_set_type(req, "application/json");
+    char buf[256];
+    httpd_resp_send_chunk(req, "[", 1);
+    for (size_t i = 0; i < sizeof(k_device_variables) / sizeof(k_device_variables[0]); ++i) {
+        const device_variable_desc_t *desc = &k_device_variables[i];
+        int len = snprintf(buf, sizeof(buf),
+                           "%s{\"key\":\"%s\",\"label\":\"%s\",\"type\":\"%s\",\"description\":\"%s\"}",
+                           (i == 0) ? "" : ",",
+                           desc->key, desc->label, desc->type, desc->description);
+        if (len < 0) {
+            len = 0;
+        } else if ((size_t)len >= sizeof(buf)) {
+            len = sizeof(buf) - 1;
+        }
+        httpd_resp_send_chunk(req, buf, len);
+    }
+    httpd_resp_send_chunk(req, "]", 1);
+    httpd_resp_send_chunk(req, NULL, 0);
+    return ESP_OK;
 }
 
 static esp_err_t wifi_config_handler(httpd_req_t *req)
@@ -601,6 +722,11 @@ static esp_err_t start_httpd(void)
     httpd_uri_t devices_cfg = {.uri = "/api/devices/config", .method = HTTP_GET, .handler = devices_config_handler};
     httpd_uri_t devices_apply = {.uri = "/api/devices/apply", .method = HTTP_POST, .handler = devices_apply_handler};
     httpd_uri_t devices_run = {.uri = "/api/devices/run", .method = HTTP_GET, .handler = devices_run_handler};
+    httpd_uri_t devices_profile_create = {.uri = "/api/devices/profile/create", .method = HTTP_POST, .handler = devices_profile_create_handler};
+    httpd_uri_t devices_profile_delete = {.uri = "/api/devices/profile/delete", .method = HTTP_POST, .handler = devices_profile_delete_handler};
+    httpd_uri_t devices_profile_rename = {.uri = "/api/devices/profile/rename", .method = HTTP_POST, .handler = devices_profile_rename_handler};
+    httpd_uri_t devices_profile_activate = {.uri = "/api/devices/profile/activate", .method = HTTP_POST, .handler = devices_profile_activate_handler};
+    httpd_uri_t devices_variables = {.uri = "/api/devices/variables", .method = HTTP_GET, .handler = devices_variables_handler};
 
     httpd_register_uri_handler(s_server, &root);
     httpd_register_uri_handler(s_server, &ping);
@@ -620,6 +746,11 @@ static esp_err_t start_httpd(void)
     httpd_register_uri_handler(s_server, &devices_cfg);
     httpd_register_uri_handler(s_server, &devices_apply);
     httpd_register_uri_handler(s_server, &devices_run);
+    httpd_register_uri_handler(s_server, &devices_profile_create);
+    httpd_register_uri_handler(s_server, &devices_profile_delete);
+    httpd_register_uri_handler(s_server, &devices_profile_rename);
+    httpd_register_uri_handler(s_server, &devices_profile_activate);
+    httpd_register_uri_handler(s_server, &devices_variables);
 
     ESP_RETURN_ON_ERROR(web_ui_pictures_register(s_server), TAG, "pictures register failed");
     ESP_RETURN_ON_ERROR(web_ui_laser_register(s_server), TAG, "laser register failed");

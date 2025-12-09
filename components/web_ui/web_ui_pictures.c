@@ -9,6 +9,8 @@
 #include "esp_timer.h"
 #include "esp_heap_caps.h"
 #include "audio_player.h"
+#include "automation_engine.h"
+#include "device_manager.h"
 #include "mqtt_core.h"
 #include "nvs.h"
 
@@ -198,6 +200,28 @@ static bool pic_all_match(void)
     return ok;
 }
 
+static void pictures_run_fallback(bool ok, const char *track)
+{
+    const char *light_topic = ok ? "pictures/lightsgreen" : "pictures/lightsred";
+    const char *payload = ok ? "ok" : "fail";
+    mqtt_core_publish(light_topic, payload);
+    if (track && track[0]) {
+        mqtt_core_publish("robot/speak", track);
+        audio_player_play(track);
+    }
+}
+
+static void pictures_trigger_actions(bool ok, const char *track)
+{
+    const char *scenario = ok ? DEVICE_MANAGER_SCENARIO_PICTURES_OK : DEVICE_MANAGER_SCENARIO_PICTURES_FAIL;
+    ESP_LOGI(TAG, "result: %s -> trigger scenario %s", ok ? "OK" : "FAIL", scenario);
+    esp_err_t err = automation_engine_trigger(DEVICE_MANAGER_DEVICE_ID_PICTURES, scenario);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "automation trigger failed for pictures (%s), fallback", esp_err_to_name(err));
+        pictures_run_fallback(ok, track);
+    }
+}
+
 static void pic_handle_result(bool ok)
 {
     static int64_t s_last_result_ms = 0;
@@ -216,11 +240,6 @@ static void pic_handle_result(bool ok)
     s_last_result_ms = now;
     s_last_result_ok = ok;
 
-    const char *light_topic = ok ? "pictures/lightsgreen" : "pictures/lightsred";
-    const char *payload = ok ? "ok" : "fail";
-    ESP_LOGI(TAG, "result: %s -> publish %s='%s'", ok ? "OK" : "FAIL", light_topic, payload);
-    mqtt_core_publish(light_topic, payload);
-
     char robot_path[96] = {0};
     char local_track[96] = {0};
     pic_lock();
@@ -229,15 +248,13 @@ static void pic_handle_result(bool ok)
     strncpy(robot_path, robot_src, sizeof(robot_path) - 1);
     strncpy(local_track, local_src, sizeof(local_track) - 1);
     pic_unlock();
-
-    if (robot_path[0]) {
-        ESP_LOGI(TAG, "result: robot/speak='%s'", robot_path);
-        mqtt_core_publish("robot/speak", robot_path);
-    }
+    automation_engine_set_variable("pictures.result_state", ok ? "ok" : "fail");
     if (local_track[0]) {
-        ESP_LOGI(TAG, "result: local audio='%s'", local_track);
-        audio_player_play(local_track);
+        automation_engine_set_variable("pictures.result_track", local_track);
+    } else {
+        automation_engine_clear_variable("pictures.result_track");
     }
+    pictures_trigger_actions(ok, local_track);
 }
 
 static void pic_handle_scan(int idx, const char *uid)
@@ -293,6 +310,7 @@ void web_ui_pictures_request_force_cycle(void)
 esp_err_t web_ui_pictures_init(void)
 {
     pic_load(&s_pic_cfg);
+    device_manager_update_pictures_tracks(s_pic_cfg.track_ok, s_pic_cfg.track_fail);
     memset(s_pic_slot_seen, 0, sizeof(s_pic_slot_seen));
     if (!s_pic_mutex) {
         s_pic_mutex = xSemaphoreCreateMutex();
@@ -428,6 +446,7 @@ static esp_err_t pictures_tracks_save_handler(httpd_req_t *req)
     if (err != ESP_OK) {
         return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "nvs save failed");
     }
+    device_manager_update_pictures_tracks(s_pic_cfg.track_ok, s_pic_cfg.track_fail);
     httpd_resp_set_hdr(req, "Connection", "close");
     return web_ui_send_ok(req, "text/plain", "tracks saved");
 }

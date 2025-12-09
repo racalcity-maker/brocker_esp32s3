@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <strings.h>
 #include <limits.h>
+#include <ctype.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "esp_check.h"
@@ -18,6 +19,11 @@
 static const char *TAG = "device_manager";
 static const uint32_t DEVICE_CONFIG_VERSION = 1;
 static const char *CONFIG_BACKUP_PATH = "/sdcard/brocker_devices.json";
+static const char *DEFAULT_PICTURES_TRACK_OK = "/sdcard/pictures/ok.mp3";
+static const char *DEFAULT_PICTURES_TRACK_FAIL = "/sdcard/pictures/fail.mp3";
+static const char *DEFAULT_LASER_RELAY_TRACK = "/sdcard/laser/relayOn.mp3";
+static const char *DEFAULT_PROFILE_ID = "default";
+static const char *DEFAULT_PROFILE_NAME = "Default";
 
 #define DM_DEVICE_MAX DEVICE_MANAGER_MAX_DEVICES
 #define DM_SCENARIO_MAX DEVICE_MANAGER_MAX_SCENARIOS_PER_DEVICE
@@ -77,6 +83,116 @@ static void str_copy(char *dst, size_t dst_len, const char *src)
     }
     strncpy(dst, src, dst_len - 1);
     dst[dst_len - 1] = 0;
+}
+
+static device_manager_profile_t *find_profile_by_id(device_manager_config_t *cfg, const char *id)
+{
+    if (!cfg || !id || !id[0]) {
+        return NULL;
+    }
+    for (uint8_t i = 0; i < cfg->profile_count && i < DEVICE_MANAGER_MAX_PROFILES; ++i) {
+        device_manager_profile_t *profile = &cfg->profiles[i];
+        if (profile->id[0] && strcasecmp(profile->id, id) == 0) {
+            return profile;
+        }
+    }
+    return NULL;
+}
+
+static void copy_devices_from_profile(device_manager_config_t *cfg, const device_manager_profile_t *profile)
+{
+    if (!cfg || !profile) {
+        return;
+    }
+    uint8_t count = profile->device_count;
+    if (count > DEVICE_MANAGER_MAX_DEVICES) {
+        count = DEVICE_MANAGER_MAX_DEVICES;
+    }
+    cfg->device_count = count;
+    if (count > 0) {
+        memcpy(cfg->devices, profile->devices, sizeof(device_descriptor_t) * count);
+    }
+}
+
+static void copy_devices_to_profile(const device_manager_config_t *cfg, device_manager_profile_t *profile)
+{
+    if (!cfg || !profile) {
+        return;
+    }
+    uint8_t count = cfg->device_count;
+    if (count > DEVICE_MANAGER_MAX_DEVICES) {
+        count = DEVICE_MANAGER_MAX_DEVICES;
+    }
+    profile->device_count = count;
+    if (count > 0) {
+        memcpy(profile->devices, cfg->devices, sizeof(device_descriptor_t) * count);
+    }
+}
+
+static device_manager_profile_t *ensure_active_profile(device_manager_config_t *cfg)
+{
+    if (!cfg) {
+        return NULL;
+    }
+    if (cfg->profile_count == 0 && DEVICE_MANAGER_MAX_PROFILES > 0) {
+        device_manager_profile_t *profile = &cfg->profiles[0];
+        memset(profile, 0, sizeof(*profile));
+        str_copy(profile->id, sizeof(profile->id), DEFAULT_PROFILE_ID);
+        str_copy(profile->name, sizeof(profile->name), DEFAULT_PROFILE_NAME);
+        profile->device_count = cfg->device_count;
+        if (profile->device_count > DEVICE_MANAGER_MAX_DEVICES) {
+            profile->device_count = DEVICE_MANAGER_MAX_DEVICES;
+        }
+        if (profile->device_count > 0) {
+            memcpy(profile->devices, cfg->devices, sizeof(device_descriptor_t) * profile->device_count);
+        }
+        cfg->profile_count = 1;
+    }
+    if (!cfg->active_profile[0] && cfg->profile_count > 0) {
+        str_copy(cfg->active_profile, sizeof(cfg->active_profile), cfg->profiles[0].id);
+    }
+    device_manager_profile_t *profile = find_profile_by_id(cfg, cfg->active_profile);
+    if (!profile && cfg->profile_count > 0) {
+        profile = &cfg->profiles[0];
+        str_copy(cfg->active_profile, sizeof(cfg->active_profile), profile->id);
+    }
+    return profile;
+}
+
+static void sync_devices_from_active_profile(device_manager_config_t *cfg)
+{
+    device_manager_profile_t *profile = ensure_active_profile(cfg);
+    if (!profile) {
+        return;
+    }
+    copy_devices_from_profile(cfg, profile);
+}
+
+static void sync_devices_to_active_profile(device_manager_config_t *cfg)
+{
+    device_manager_profile_t *profile = ensure_active_profile(cfg);
+    if (!profile) {
+        return;
+    }
+    copy_devices_to_profile(cfg, profile);
+}
+
+static bool profile_id_valid(const char *id)
+{
+    if (!id || !id[0]) {
+        return false;
+    }
+    size_t len = strlen(id);
+    if (len >= DEVICE_MANAGER_ID_MAX_LEN) {
+        return false;
+    }
+    for (size_t i = 0; i < len; ++i) {
+        unsigned char c = (unsigned char)id[i];
+        if (!(isalnum(c) || c == '-' || c == '_')) {
+            return false;
+        }
+    }
+    return true;
 }
 
 static uint32_t json_number_to_u32(const cJSON *item, uint32_t default_val)
@@ -238,12 +354,224 @@ static void dm_unlock(void)
     }
 }
 
+static device_descriptor_t *find_device_by_id(device_manager_config_t *cfg, const char *id)
+{
+    if (!cfg || !id || !id[0]) {
+        return NULL;
+    }
+    for (uint8_t i = 0; i < cfg->device_count && i < DEVICE_MANAGER_MAX_DEVICES; ++i) {
+        device_descriptor_t *dev = &cfg->devices[i];
+        if ((dev->id[0] && strcasecmp(dev->id, id) == 0) ||
+            (dev->display_name[0] && strcasecmp(dev->display_name, id) == 0)) {
+            return dev;
+        }
+    }
+    return NULL;
+}
+
+static device_scenario_t *find_scenario_by_id(device_descriptor_t *device, const char *id)
+{
+    if (!device || !id || !id[0]) {
+        return NULL;
+    }
+    for (uint8_t i = 0; i < device->scenario_count && i < DEVICE_MANAGER_MAX_SCENARIOS_PER_DEVICE; ++i) {
+        device_scenario_t *sc = &device->scenarios[i];
+        if ((sc->id[0] && strcasecmp(sc->id, id) == 0) ||
+            (sc->name[0] && strcasecmp(sc->name, id) == 0)) {
+            return sc;
+        }
+    }
+    return NULL;
+}
+
 static void load_defaults(device_manager_config_t *cfg)
 {
     memset(cfg, 0, sizeof(*cfg));
     cfg->schema_version = DEVICE_CONFIG_VERSION;
     cfg->generation = 1;
     cfg->tab_limit = DEVICE_MANAGER_MAX_TABS;
+    cfg->profile_count = 0;
+    cfg->active_profile[0] = 0;
+    ensure_active_profile(cfg);
+    sync_devices_from_active_profile(cfg);
+}
+
+static const device_descriptor_t k_default_pictures_device = {
+    .id = DEVICE_MANAGER_DEVICE_ID_PICTURES,
+    .display_name = "Pictures",
+    .tab_count = 0,
+    .topic_count = 0,
+    .scenario_count = 2,
+    .scenarios = {
+        {
+            .id = DEVICE_MANAGER_SCENARIO_PICTURES_OK,
+            .name = "Pictures OK",
+            .step_count = 3,
+            .steps = {
+                {
+                    .type = DEVICE_ACTION_MQTT_PUBLISH,
+                    .data.mqtt = {
+                        .topic = "pictures/lightsgreen",
+                        .payload = "ok",
+                        .qos = 0,
+                        .retain = false,
+                    },
+                },
+                {
+                    .type = DEVICE_ACTION_MQTT_PUBLISH,
+                    .data.mqtt = {
+                        .topic = "robot/speak",
+                        .payload = "/sdcard/pictures/ok.mp3",
+                        .qos = 0,
+                        .retain = false,
+                    },
+                },
+                {
+                    .type = DEVICE_ACTION_AUDIO_PLAY,
+                    .data.audio = {
+                        .track = "/sdcard/pictures/ok.mp3",
+                        .blocking = false,
+                    },
+                },
+            },
+        },
+        {
+            .id = DEVICE_MANAGER_SCENARIO_PICTURES_FAIL,
+            .name = "Pictures Fail",
+            .step_count = 3,
+            .steps = {
+                {
+                    .type = DEVICE_ACTION_MQTT_PUBLISH,
+                    .data.mqtt = {
+                        .topic = "pictures/lightsred",
+                        .payload = "fail",
+                        .qos = 0,
+                        .retain = false,
+                    },
+                },
+                {
+                    .type = DEVICE_ACTION_MQTT_PUBLISH,
+                    .data.mqtt = {
+                        .topic = "robot/speak",
+                        .payload = "/sdcard/pictures/fail.mp3",
+                        .qos = 0,
+                        .retain = false,
+                    },
+                },
+                {
+                    .type = DEVICE_ACTION_AUDIO_PLAY,
+                    .data.audio = {
+                        .track = "/sdcard/pictures/fail.mp3",
+                        .blocking = false,
+                    },
+                },
+            },
+        },
+    },
+};
+
+static const device_descriptor_t k_default_laser_device = {
+    .id = DEVICE_MANAGER_DEVICE_ID_LASER,
+    .display_name = "Laser",
+    .tab_count = 0,
+    .topic_count = 0,
+    .scenario_count = 1,
+    .scenarios = {
+        {
+            .id = DEVICE_MANAGER_SCENARIO_LASER_TRIGGER,
+            .name = "Laser Trigger",
+            .step_count = 3,
+            .steps = {
+                {
+                    .type = DEVICE_ACTION_MQTT_PUBLISH,
+                    .data.mqtt = {
+                        .topic = "relay/relayOn",
+                        .payload = "on",
+                        .qos = 0,
+                        .retain = false,
+                    },
+                },
+                {
+                    .type = DEVICE_ACTION_MQTT_PUBLISH,
+                    .data.mqtt = {
+                        .topic = "robot/laser/relayOn.mp3",
+                        .payload = "/sdcard/laser/relayOn.mp3",
+                        .qos = 0,
+                        .retain = false,
+                    },
+                },
+                {
+                    .type = DEVICE_ACTION_AUDIO_PLAY,
+                    .data.audio = {
+                        .track = "/sdcard/laser/relayOn.mp3",
+                        .blocking = false,
+                    },
+                },
+            },
+        },
+    },
+};
+
+static bool append_device_from_template(device_manager_config_t *cfg, const device_descriptor_t *tmpl)
+{
+    if (!cfg || !tmpl) {
+        return false;
+    }
+    if (cfg->device_count >= DEVICE_MANAGER_MAX_DEVICES) {
+        ESP_LOGW(TAG, "device list full, cannot add %s", tmpl->id);
+        return false;
+    }
+    device_descriptor_t *dst = &cfg->devices[cfg->device_count];
+    memcpy(dst, tmpl, sizeof(*dst));
+    cfg->device_count++;
+    return true;
+}
+
+static bool ensure_core_devices(device_manager_config_t *cfg)
+{
+    bool changed = false;
+    if (!find_device_by_id(cfg, DEVICE_MANAGER_DEVICE_ID_PICTURES)) {
+        if (append_device_from_template(cfg, &k_default_pictures_device)) {
+            changed = true;
+            ESP_LOGI(TAG, "added default device '%s'", DEVICE_MANAGER_DEVICE_ID_PICTURES);
+        }
+    }
+    if (!find_device_by_id(cfg, DEVICE_MANAGER_DEVICE_ID_LASER)) {
+        if (append_device_from_template(cfg, &k_default_laser_device)) {
+            changed = true;
+            ESP_LOGI(TAG, "added default device '%s'", DEVICE_MANAGER_DEVICE_ID_LASER);
+        }
+    }
+    return changed;
+}
+
+static device_action_step_t *find_mqtt_step(device_scenario_t *scenario, const char *topic)
+{
+    if (!scenario || !topic || !topic[0]) {
+        return NULL;
+    }
+    for (uint8_t i = 0; i < scenario->step_count && i < DEVICE_MANAGER_MAX_STEPS_PER_SCENARIO; ++i) {
+        device_action_step_t *step = &scenario->steps[i];
+        if (step->type == DEVICE_ACTION_MQTT_PUBLISH &&
+            strcasecmp(step->data.mqtt.topic, topic) == 0) {
+            return step;
+        }
+    }
+    return NULL;
+}
+
+static device_action_step_t *find_audio_step(device_scenario_t *scenario)
+{
+    if (!scenario) {
+        return NULL;
+    }
+    for (uint8_t i = 0; i < scenario->step_count && i < DEVICE_MANAGER_MAX_STEPS_PER_SCENARIO; ++i) {
+        device_action_step_t *step = &scenario->steps[i];
+        if (step->type == DEVICE_ACTION_AUDIO_PLAY) {
+            return step;
+        }
+    }
+    return NULL;
 }
 
 static esp_err_t parse_config_json(const char *json, size_t len, device_manager_config_t *cfg)
@@ -385,6 +713,13 @@ esp_err_t device_manager_init(void)
         dm_unlock();
     }
     free(temp);
+    sync_devices_from_active_profile(s_config);
+    bool defaults_added = ensure_core_devices(s_config);
+    if (defaults_added) {
+        s_config->generation++;
+        ESP_ERROR_CHECK_WITHOUT_ABORT(storage_save(s_config));
+    }
+    sync_devices_to_active_profile(s_config);
     s_config_ready = true;
     ESP_LOGI(TAG, "device_manager_init finished successfully");
     for (int i = 0; i < 10; ++i) {
@@ -420,6 +755,13 @@ esp_err_t device_manager_reload_from_nvs(void)
     feed_wdt();
     dm_copy(s_config, temp, sizeof(*temp));
     s_config->generation++;
+    sync_devices_from_active_profile(s_config);
+    bool defaults_added = ensure_core_devices(s_config);
+    if (defaults_added) {
+        s_config->generation++;
+        ESP_ERROR_CHECK_WITHOUT_ABORT(storage_save(s_config));
+    }
+    sync_devices_to_active_profile(s_config);
     feed_wdt();
     dm_unlock();
     free(temp);
@@ -433,6 +775,7 @@ static esp_err_t persist_locked(void)
         return ESP_ERR_NO_MEM;
     }
     feed_wdt();
+    sync_devices_to_active_profile(s_config);
     dm_copy(snapshot, s_config, sizeof(*snapshot));
     feed_wdt();
     esp_err_t err = storage_save(snapshot);
@@ -465,6 +808,11 @@ esp_err_t device_manager_apply(const device_manager_config_t *next)
     dm_copy(s_config, next, sizeof(*next));
     feed_wdt();
     s_config->generation++;
+    bool defaults_added = ensure_core_devices(s_config);
+    if (defaults_added) {
+        s_config->generation++;
+    }
+    sync_devices_to_active_profile(s_config);
     feed_wdt();
     esp_err_t err = persist_locked();
     dm_unlock();
@@ -487,6 +835,7 @@ esp_err_t device_manager_sync_file(void)
         return ESP_ERR_NO_MEM;
     }
     dm_lock();
+    sync_devices_to_active_profile(s_config);
     dm_copy(snapshot, s_config, sizeof(*snapshot));
     dm_unlock();
     esp_err_t err = storage_save(snapshot);
@@ -686,6 +1035,31 @@ static esp_err_t export_json_from_config(const device_manager_config_t *cfg, cha
     cJSON_AddNumberToObject(root, "schema", cfg->schema_version);
     cJSON_AddNumberToObject(root, "generation", cfg->generation);
     cJSON_AddNumberToObject(root, "tab_limit", cfg->tab_limit);
+    const char *active_profile = cfg->active_profile[0] ? cfg->active_profile : DEFAULT_PROFILE_ID;
+    cJSON_AddStringToObject(root, "active_profile", active_profile);
+    cJSON *profiles = cJSON_AddArrayToObject(root, "profiles");
+    if (!profiles) {
+        err = ESP_ERR_NO_MEM;
+        goto cleanup;
+    }
+    for (uint8_t i = 0; i < cfg->profile_count && i < DEVICE_MANAGER_MAX_PROFILES; ++i) {
+        const device_manager_profile_t *profile = &cfg->profiles[i];
+        if (!profile->id[0]) {
+            continue;
+        }
+        cJSON *p = cJSON_CreateObject();
+        if (!p) {
+            err = ESP_ERR_NO_MEM;
+            goto cleanup;
+        }
+        cJSON_AddItemToArray(profiles, p);
+        cJSON_AddStringToObject(p, "id", profile->id);
+        cJSON_AddStringToObject(p, "name", profile->name[0] ? profile->name : profile->id);
+        cJSON_AddNumberToObject(p, "device_count", profile->device_count);
+        if (strcasecmp(profile->id, active_profile) == 0) {
+            cJSON_AddBoolToObject(p, "active", true);
+        }
+    }
     cJSON *devices = cJSON_AddArrayToObject(root, "devices");
     if (!devices) {
         err = ESP_ERR_NO_MEM;
@@ -802,6 +1176,11 @@ cleanup:
 
 esp_err_t device_manager_export_json(char **out_json, size_t *out_len)
 {
+    return device_manager_export_profile_json(NULL, out_json, out_len);
+}
+
+esp_err_t device_manager_export_profile_json(const char *profile_id, char **out_json, size_t *out_len)
+{
     if (!out_json) {
         return ESP_ERR_INVALID_ARG;
     }
@@ -821,8 +1200,98 @@ esp_err_t device_manager_export_json(char **out_json, size_t *out_len)
     dm_copy(snapshot, s_config, sizeof(*snapshot));
     feed_wdt();
     dm_unlock();
+    if (profile_id && profile_id[0]) {
+        str_copy(snapshot->active_profile, sizeof(snapshot->active_profile), profile_id);
+    }
+    ensure_active_profile(snapshot);
+    sync_devices_from_active_profile(snapshot);
     esp_err_t err = export_json_from_config(snapshot, out_json, out_len);
     heap_caps_free(snapshot);
+    return err;
+}
+
+esp_err_t device_manager_update_pictures_tracks(const char *ok_track, const char *fail_track)
+{
+    if (!s_config_ready) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    const char *ok = (ok_track && ok_track[0]) ? ok_track : DEFAULT_PICTURES_TRACK_OK;
+    const char *fail = (fail_track && fail_track[0]) ? fail_track : DEFAULT_PICTURES_TRACK_FAIL;
+    dm_lock();
+    device_descriptor_t *dev = find_device_by_id(s_config, DEVICE_MANAGER_DEVICE_ID_PICTURES);
+    if (!dev) {
+        dm_unlock();
+        return ESP_ERR_NOT_FOUND;
+    }
+    bool changed = false;
+    device_scenario_t *ok_scen = find_scenario_by_id(dev, DEVICE_MANAGER_SCENARIO_PICTURES_OK);
+    if (ok_scen) {
+        device_action_step_t *robot = find_mqtt_step(ok_scen, "robot/speak");
+        device_action_step_t *audio = find_audio_step(ok_scen);
+        if (robot) {
+            str_copy(robot->data.mqtt.payload, sizeof(robot->data.mqtt.payload), ok);
+            changed = true;
+        }
+        if (audio) {
+            str_copy(audio->data.audio.track, sizeof(audio->data.audio.track), ok);
+            changed = true;
+        }
+    }
+    device_scenario_t *fail_scen = find_scenario_by_id(dev, DEVICE_MANAGER_SCENARIO_PICTURES_FAIL);
+    if (fail_scen) {
+        device_action_step_t *robot = find_mqtt_step(fail_scen, "robot/speak");
+        device_action_step_t *audio = find_audio_step(fail_scen);
+        if (robot) {
+            str_copy(robot->data.mqtt.payload, sizeof(robot->data.mqtt.payload), fail);
+            changed = true;
+        }
+        if (audio) {
+            str_copy(audio->data.audio.track, sizeof(audio->data.audio.track), fail);
+            changed = true;
+        }
+    }
+    esp_err_t err = ESP_OK;
+    if (changed) {
+        s_config->generation++;
+        sync_devices_to_active_profile(s_config);
+        err = storage_save(s_config);
+    }
+    dm_unlock();
+    return err;
+}
+
+esp_err_t device_manager_update_laser_relay_track(const char *relay_track)
+{
+    if (!s_config_ready) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    const char *track = (relay_track && relay_track[0]) ? relay_track : DEFAULT_LASER_RELAY_TRACK;
+    dm_lock();
+    device_descriptor_t *dev = find_device_by_id(s_config, DEVICE_MANAGER_DEVICE_ID_LASER);
+    if (!dev) {
+        dm_unlock();
+        return ESP_ERR_NOT_FOUND;
+    }
+    device_scenario_t *sc = find_scenario_by_id(dev, DEVICE_MANAGER_SCENARIO_LASER_TRIGGER);
+    bool changed = false;
+    if (sc) {
+        device_action_step_t *robot = find_mqtt_step(sc, "robot/laser/relayOn.mp3");
+        device_action_step_t *audio = find_audio_step(sc);
+        if (robot) {
+            str_copy(robot->data.mqtt.payload, sizeof(robot->data.mqtt.payload), track);
+            changed = true;
+        }
+        if (audio) {
+            str_copy(audio->data.audio.track, sizeof(audio->data.audio.track), track);
+            changed = true;
+        }
+    }
+    esp_err_t err = ESP_OK;
+    if (changed) {
+        s_config->generation++;
+        err = storage_save(s_config);
+    }
+    dm_unlock();
     return err;
 }
 
@@ -836,6 +1305,42 @@ static bool populate_config_from_json(device_manager_config_t *cfg, const cJSON 
     cfg->generation = json_number_to_u32(cJSON_GetObjectItem(root, "generation"), cfg->generation);
     uint32_t tab_limit = json_number_to_u32(cJSON_GetObjectItem(root, "tab_limit"), DEVICE_MANAGER_MAX_TABS);
     cfg->tab_limit = (uint8_t)((tab_limit > DEVICE_MANAGER_MAX_TABS) ? DEVICE_MANAGER_MAX_TABS : tab_limit);
+    cfg->profile_count = 0;
+    cfg->active_profile[0] = 0;
+    const cJSON *profiles = cJSON_GetObjectItem(root, "profiles");
+    if (cJSON_IsArray(profiles)) {
+        const cJSON *node = NULL;
+        cJSON_ArrayForEach(node, profiles) {
+            if (cfg->profile_count >= DEVICE_MANAGER_MAX_PROFILES) {
+                break;
+            }
+            if (!cJSON_IsObject(node)) {
+                continue;
+            }
+            const cJSON *id_item = cJSON_GetObjectItem(node, "id");
+            if (!cJSON_IsString(id_item) || !id_item->valuestring[0]) {
+                continue;
+            }
+            device_manager_profile_t *profile = find_profile_by_id(cfg, id_item->valuestring);
+            if (!profile && cfg->profile_count < DEVICE_MANAGER_MAX_PROFILES) {
+                profile = &cfg->profiles[cfg->profile_count++];
+                memset(profile, 0, sizeof(*profile));
+                str_copy(profile->id, sizeof(profile->id), id_item->valuestring);
+            }
+            if (!profile) {
+                continue;
+            }
+            const cJSON *name_item = cJSON_GetObjectItem(node, "name");
+            if (cJSON_IsString(name_item) && name_item->valuestring) {
+                str_copy(profile->name, sizeof(profile->name), name_item->valuestring);
+            }
+        }
+    }
+    const cJSON *active = cJSON_GetObjectItem(root, "active_profile");
+    if (cJSON_IsString(active) && active->valuestring && active->valuestring[0]) {
+        str_copy(cfg->active_profile, sizeof(cfg->active_profile), active->valuestring);
+    }
+    ensure_active_profile(cfg);
 
     const cJSON *devices = cJSON_GetObjectItem(root, "devices");
     if (!devices || !cJSON_IsArray(devices)) {
@@ -952,10 +1457,11 @@ static bool populate_config_from_json(device_manager_config_t *cfg, const cJSON 
         feed_wdt();
     }
     cfg->device_count = dev_count;
+    sync_devices_to_active_profile(cfg);
     return true;
 }
 
-esp_err_t device_manager_apply_json(const char *json, size_t len)
+esp_err_t device_manager_apply_profile_json(const char *profile_id, const char *json, size_t len)
 {
     if (!json || len == 0) {
         return ESP_ERR_INVALID_ARG;
@@ -975,8 +1481,147 @@ esp_err_t device_manager_apply_json(const char *json, size_t len)
         free(next);
         return ESP_ERR_INVALID_ARG;
     }
+    if (profile_id && profile_id[0]) {
+        str_copy(next->active_profile, sizeof(next->active_profile), profile_id);
+    }
     feed_wdt();
     esp_err_t err = device_manager_apply(next);
     free(next);
     return err;
+}
+
+esp_err_t device_manager_profile_create(const char *id, const char *name, const char *clone_id)
+{
+    if (!s_config_ready) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (!profile_id_valid(id)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    dm_lock();
+    ensure_active_profile(s_config);
+    if (find_profile_by_id(s_config, id)) {
+        dm_unlock();
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (s_config->profile_count >= DEVICE_MANAGER_MAX_PROFILES) {
+        dm_unlock();
+        return ESP_ERR_NO_MEM;
+    }
+    device_manager_profile_t *dst = &s_config->profiles[s_config->profile_count++];
+    memset(dst, 0, sizeof(*dst));
+    str_copy(dst->id, sizeof(dst->id), id);
+    str_copy(dst->name, sizeof(dst->name), (name && name[0]) ? name : id);
+    const device_manager_profile_t *src = NULL;
+    if (clone_id && clone_id[0]) {
+        src = find_profile_by_id(s_config, clone_id);
+    }
+    if (!src) {
+        src = ensure_active_profile(s_config);
+    }
+    if (src) {
+        memcpy(dst->devices, src->devices, sizeof(dst->devices));
+        dst->device_count = src->device_count;
+    }
+    str_copy(s_config->active_profile, sizeof(s_config->active_profile), dst->id);
+    sync_devices_from_active_profile(s_config);
+    s_config->generation++;
+    esp_err_t err = persist_locked();
+    dm_unlock();
+    return err;
+}
+
+esp_err_t device_manager_profile_delete(const char *id)
+{
+    if (!s_config_ready) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (!id || !id[0]) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    dm_lock();
+    ensure_active_profile(s_config);
+    if (s_config->profile_count <= 1) {
+        dm_unlock();
+        return ESP_ERR_INVALID_STATE;
+    }
+    int idx = -1;
+    for (uint8_t i = 0; i < s_config->profile_count; ++i) {
+        if (strcasecmp(s_config->profiles[i].id, id) == 0) {
+            idx = i;
+            break;
+        }
+    }
+    if (idx < 0) {
+        dm_unlock();
+        return ESP_ERR_NOT_FOUND;
+    }
+    if ((uint8_t)idx < s_config->profile_count - 1) {
+        memmove(&s_config->profiles[idx], &s_config->profiles[idx + 1],
+                sizeof(device_manager_profile_t) * (s_config->profile_count - idx - 1));
+    }
+    s_config->profile_count--;
+    if (strcasecmp(s_config->active_profile, id) == 0) {
+        s_config->active_profile[0] = 0;
+    }
+    ensure_active_profile(s_config);
+    sync_devices_from_active_profile(s_config);
+    s_config->generation++;
+    esp_err_t err = persist_locked();
+    dm_unlock();
+    return err;
+}
+
+esp_err_t device_manager_profile_rename(const char *id, const char *new_name)
+{
+    if (!s_config_ready) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (!id || !id[0] || !new_name || !new_name[0]) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    dm_lock();
+    ensure_active_profile(s_config);
+    device_manager_profile_t *profile = find_profile_by_id(s_config, id);
+    if (!profile) {
+        dm_unlock();
+        return ESP_ERR_NOT_FOUND;
+    }
+    str_copy(profile->name, sizeof(profile->name), new_name);
+    s_config->generation++;
+    esp_err_t err = persist_locked();
+    dm_unlock();
+    return err;
+}
+
+esp_err_t device_manager_profile_activate(const char *id)
+{
+    if (!s_config_ready) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (!id || !id[0]) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    dm_lock();
+    ensure_active_profile(s_config);
+    device_manager_profile_t *profile = find_profile_by_id(s_config, id);
+    if (!profile) {
+        dm_unlock();
+        return ESP_ERR_NOT_FOUND;
+    }
+    if (strcasecmp(s_config->active_profile, id) == 0) {
+        dm_unlock();
+        return ESP_OK;
+    }
+    str_copy(s_config->active_profile, sizeof(s_config->active_profile), profile->id);
+    sync_devices_from_active_profile(s_config);
+    s_config->generation++;
+    esp_err_t err = persist_locked();
+    dm_unlock();
+    return err;
+}
+
+esp_err_t device_manager_apply_json(const char *json, size_t len)
+{
+    return device_manager_apply_profile_json(NULL, json, len);
 }
