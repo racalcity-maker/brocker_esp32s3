@@ -344,6 +344,7 @@
   }
 
   function renderScenarioDetail(scenario, deviceIdx) {
+    const steps = scenario.steps || [];
     const idx = state.selectedScenario;
     const scenarioNameClass = buildInputClass(`device.${deviceIdx}.scenario.${idx}.name`);
     const canAddStep = steps.length < MAX_STEPS_PER_SCENARIO;
@@ -1356,11 +1357,15 @@
       return;
     }
     const scenario = findScenarioById(device, scenarioId);
-    if (!scenario || !scenario.steps) {
+    if (!scenario) {
       return;
     }
-    defaults.forEach((def) => {
-      const step = scenario.steps[def.index];
+    if (!Array.isArray(scenario.steps)) {
+      scenario.steps = [];
+    }
+    ensureScenarioSteps(scenario, defaults.length);
+    defaults.forEach((def, idx) => {
+      const step = scenario.steps[def.index ?? idx];
       if (!step) {
         return;
       }

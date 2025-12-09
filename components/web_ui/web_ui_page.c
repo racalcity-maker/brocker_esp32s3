@@ -98,7 +98,7 @@ static const char s_web_ui_index[] =
         "table{width:100%;border-collapse:collapse;margin-top:10px;}"
         "td,th{border:1px solid #1f2430;padding:8px;}"
         "@media(max-width:600px){header{padding:12px;} .pane{padding:16px;width:100%;} .card{margin:0 0 12px;width:100%;} .hero{margin:0 0 12px;padding:12px;} .row{flex-direction:column;align-items:stretch;} .row button,.row select,.row input{width:100%;max-width:100%;} .controls-row{flex-direction:column;align-items:stretch;} .control-buttons{justify-content:space-between;} .volume-control{width:100%;} .progress-row input{max-width:100%;} .file-browser{padding:10px;} .file-grid{grid-template-columns:repeat(4,minmax(0,1fr));max-width:none;} .robot-grid{grid-template-columns:repeat(4,minmax(0,1fr));max-width:none;}}"
-        "</style><link rel='stylesheet' href='/ui/devices.css?v=3'><link rel='stylesheet' href='/ui/devices_editor.css?v=1'></head><body>"
+        "</style><link rel='stylesheet' href='/ui/devices.css?v=3'><link rel='stylesheet' href='/ui/devices_editor.css?v=2'></head><body>"
         "<div class='page'>"
         "<header><div class='tabs'>"
         "<div class='tab active' data-tab='status' data-icon='status'><span class='tab-icon'></span><span class='tab-label'>Status</span></div>"
@@ -364,7 +364,7 @@ static const char s_web_ui_index[] =
         "function toggleRepeat(){repeatOne=!repeatOne;const btn=document.getElementById('audio_repeat_btn');if(btn){if(repeatOne){btn.classList.add('active');}else{btn.classList.remove('active');}}}"
         "refreshModeButtons();"
         "loadStatus().then(()=>{if(statusInterval)clearInterval(statusInterval);statusInterval=setInterval(()=>{const activePane=document.querySelector('.pane.active');if(!activePane)return;const activeId=activePane.id;if(activeId==='pane-status'||activeId==='pane-audio'){fetchAudioStatus();}},3000);});"
-        "</script><script src='/ui/devices.js?v=3'></script><script src='/ui/devices_editor.js?v=1'></script>"
+        "</script><script src='/ui/devices.js?v=3'></script><script src='/ui/devices_editor.js?v=2'></script>"
         "</div>"
         "</body></html>";
 
