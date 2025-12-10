@@ -1,0 +1,66 @@
+name: ESP-IDF CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  IDF_VERSION: v5.3.3
+  IDF_PATH: ${{ github.workspace }}/esp-idf
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache ESP-IDF tools
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.espressif
+            ${{ env.IDF_PATH }}
+          key: ${{ runner.os }}-espidf-${{ env.IDF_VERSION }}-${{ hashFiles('CMakeLists.txt', 'sdkconfig') }}
+          restore-keys: |
+            ${{ runner.os }}-espidf-${{ env.IDF_VERSION }}
+
+      - name: Install ESP-IDF ${{ env.IDF_VERSION }}
+        shell: bash
+        run: |
+          if [ ! -d "${IDF_PATH}" ]; then
+            git clone --depth 1 --branch "${IDF_VERSION}" https://github.com/espressif/esp-idf.git "${IDF_PATH}"
+          fi
+          cd "${IDF_PATH}"
+          ./install.sh esp32s3
+
+      - name: Build firmware
+        shell: bash
+        run: |
+          source "${IDF_PATH}/export.sh"
+          idf.py set-target esp32s3
+          idf.py build
+
+      - name: Build device_manager tests
+        shell: bash
+        run: |
+          source "${IDF_PATH}/export.sh"
+          cd tests/device_manager
+          idf.py set-target esp32s3
+          idf.py build
+
+      - name: Upload build artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-build
+          path: |
+            build/*.bin
+            build/*.elf

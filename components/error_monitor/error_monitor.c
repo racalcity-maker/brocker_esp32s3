@@ -20,7 +20,7 @@ static void update_led_locked(void)
     } else if (!s_wifi_ok) {
         pattern = STATUS_LED_PATTERN_SOLID_RED;
     } else {
-        pattern = STATUS_LED_PATTERN_OFF;
+        pattern = STATUS_LED_PATTERN_SOLID_GREEN;
     }
     status_led_set_pattern(pattern);
 }

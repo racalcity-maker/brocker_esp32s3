@@ -55,6 +55,13 @@ Useful `menuconfig` sections:
 5. **Devices & templates**: add devices via Simple editor or Wizard, choose the template, and fill its fields (slots, heartbeats, MQTT routes). Scenarios and topics appear under the template card.
 6. **Saving**: click “Save changes”. The manager validates the JSON, writes it to SD, reinitializes template runtimes, and logs the resulting memory usage.
 
+### Status LED Feedback
+
+- GPIO 48 drives the built-in WS2812 LED to reflect system health.
+- Solid green (≈20% brightness) means Wi-Fi is connected and the SD card is mounted and healthy.
+- Solid red indicates Wi-Fi isn’t up yet; blinking red warns about a missing or faulty SD card.
+- These patterns come from `error_monitor` → `status_led`, so you can reuse the same API if extra states or custom colors are required.
+
 ---
 
 ## Built-in MQTT Broker

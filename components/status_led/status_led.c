@@ -6,7 +6,7 @@
 #include "led_strip.h"
 
 #define STATUS_LED_GPIO 48
-#define STATUS_LED_BRIGHTNESS 50
+#define STATUS_LED_BRIGHTNESS 51  // ~20% duty (0-255 scale) for softer glow
 
 static const char *TAG = "status_led";
 static led_strip_handle_t s_strip = NULL;
