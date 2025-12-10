@@ -20,8 +20,5 @@ const char *mqtt_core_topic_for_event(event_bus_type_t type);
 uint8_t mqtt_core_client_count(void);
 typedef struct {
     uint8_t total;
-    uint8_t pictures;
-    uint8_t laser;
-    uint8_t robot;
 } mqtt_client_stats_t;
 void mqtt_core_get_client_stats(mqtt_client_stats_t *out);

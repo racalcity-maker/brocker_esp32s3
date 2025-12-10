@@ -9,31 +9,11 @@
 extern "C" {
 #endif
 
-#define DEVICE_MANAGER_MAX_DEVICES               12
-#define DEVICE_MANAGER_MAX_TABS                  12
-#define DEVICE_MANAGER_MAX_TOPICS_PER_DEVICE     6
-#define DEVICE_MANAGER_MAX_SCENARIOS_PER_DEVICE  8
-#define DEVICE_MANAGER_MAX_STEPS_PER_SCENARIO   16
-#define DEVICE_MANAGER_MAX_FLAG_RULES            4
-#define DEVICE_MANAGER_MAX_PROFILES              4
-#define DEVICE_MANAGER_ID_MAX_LEN               32
-#define DEVICE_MANAGER_NAME_MAX_LEN             48
-#define DEVICE_MANAGER_TOPIC_MAX_LEN            96
-#define DEVICE_MANAGER_PAYLOAD_MAX_LEN         160
-#define DEVICE_MANAGER_FLAG_NAME_MAX_LEN        32
-#define DEVICE_MANAGER_TRACK_NAME_MAX_LEN       64
-
-#define DEVICE_MANAGER_DEVICE_ID_PICTURES   "pictures_core"
-#define DEVICE_MANAGER_DEVICE_ID_LASER      "laser_core"
-#define DEVICE_MANAGER_SCENARIO_PICTURES_OK   "pictures_ok"
-#define DEVICE_MANAGER_SCENARIO_PICTURES_FAIL "pictures_fail"
-#define DEVICE_MANAGER_SCENARIO_LASER_TRIGGER "laser_trigger"
+#include "dm_limits.h"
+#include "dm_template_registry.h"
 
 typedef enum {
     DEVICE_TAB_AUDIO = 0,
-    DEVICE_TAB_PICTURES,
-    DEVICE_TAB_LASER,
-    DEVICE_TAB_ROBOT,
     DEVICE_TAB_CUSTOM,
 } device_tab_type_t;
 
@@ -53,7 +33,6 @@ typedef enum {
     DEVICE_ACTION_MQTT_PUBLISH,
     DEVICE_ACTION_AUDIO_PLAY,
     DEVICE_ACTION_AUDIO_STOP,
-    DEVICE_ACTION_LASER_TRIGGER,
     DEVICE_ACTION_SET_FLAG,
     DEVICE_ACTION_WAIT_FLAGS,
     DEVICE_ACTION_LOOP,
@@ -131,13 +110,14 @@ typedef struct {
     device_topic_binding_t topics[DEVICE_MANAGER_MAX_TOPICS_PER_DEVICE];
     uint8_t scenario_count;
     device_scenario_t scenarios[DEVICE_MANAGER_MAX_SCENARIOS_PER_DEVICE];
+    bool template_assigned;
+    dm_template_config_t template_config;
 } device_descriptor_t;
 
 typedef struct {
     char id[DEVICE_MANAGER_ID_MAX_LEN];
     char name[DEVICE_MANAGER_NAME_MAX_LEN];
     uint8_t device_count;
-    device_descriptor_t devices[DEVICE_MANAGER_MAX_DEVICES];
 } device_manager_profile_t;
 
 typedef struct {
@@ -161,8 +141,6 @@ esp_err_t device_manager_export_json(char **out_json, size_t *out_len);
 esp_err_t device_manager_export_profile_json(const char *profile_id, char **out_json, size_t *out_len);
 esp_err_t device_manager_apply_json(const char *json, size_t len);
 esp_err_t device_manager_apply_profile_json(const char *profile_id, const char *json, size_t len);
-esp_err_t device_manager_update_pictures_tracks(const char *ok_track, const char *fail_track);
-esp_err_t device_manager_update_laser_relay_track(const char *relay_track);
 esp_err_t device_manager_profile_create(const char *id, const char *name, const char *clone_id);
 esp_err_t device_manager_profile_delete(const char *id);
 esp_err_t device_manager_profile_rename(const char *id, const char *new_name);

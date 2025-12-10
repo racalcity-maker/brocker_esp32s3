@@ -732,7 +732,6 @@ static void on_event(const event_bus_message_t *msg)
         break;
     case EVENT_CARD_OK:
     case EVENT_CARD_BAD:
-    case EVENT_LASER_TRIGGER:
     case EVENT_RELAY_CMD:
     case EVENT_SYSTEM_STATUS:
         break;

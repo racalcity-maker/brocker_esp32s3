@@ -18,6 +18,7 @@
 #include "config_store.h"
 #include "event_bus.h"
 #include "automation_engine.h"
+#include "dm_template_runtime.h"
 
 // Минимальный MQTT 3.1.1 брокер: QoS0/1, retain, LWT, простая ACL (prefix-based), без QoS2/username/password/TLS.
 
@@ -91,7 +92,6 @@ static const event_topic_map_t k_outgoing_map[] = {
     {EVENT_SYSTEM_STATUS, "sys/broker/metrics"},
     {EVENT_CARD_OK, "access/card/ok"},
     {EVENT_CARD_BAD, "access/card/bad"},
-    {EVENT_LASER_TRIGGER, "laser/beam/state"},
     {EVENT_RELAY_CMD, "relay/cmd"},
     {EVENT_WEB_COMMAND, "web/cmd"},
 };
@@ -100,8 +100,6 @@ static const event_topic_map_t k_incoming_map[] = {
     {EVENT_AUDIO_PLAY, "audio/play"},
     {EVENT_RELAY_CMD, "relay/"},
     {EVENT_WEB_COMMAND, "web/cmd"},
-    {EVENT_WEB_COMMAND, "pictures/"},
-    {EVENT_WEB_COMMAND, "laser/"},
 };
 
 static mqtt_session_t *s_sessions = NULL;
@@ -184,13 +182,6 @@ static bool ensure_accept_task_storage(void)
     return true;
 }
 
-static bool client_id_matches(const char *id, const char *prefix)
-{
-    if (!id || !prefix) return false;
-    size_t len = strlen(prefix);
-    return strncmp(id, prefix, len) == 0;
-}
-
 void mqtt_core_get_client_stats(mqtt_client_stats_t *out)
 {
     if (!out) return;
@@ -201,10 +192,6 @@ void mqtt_core_get_client_stats(mqtt_client_stats_t *out)
     for (size_t i = 0; i < MQTT_MAX_CLIENTS; ++i) {
         if (!s_sessions[i].active) continue;
         out->total++;
-        const char *id = s_sessions[i].client_id;
-        if (client_id_matches(id, "pic")) out->pictures++;
-        if (client_id_matches(id, "laser") || client_id_matches(id, "relay")) out->laser++;
-        if (client_id_matches(id, "robot") || client_id_matches(id, "puppet")) out->robot++;
     }
     if (s_lock) {
         xSemaphoreGive(s_lock);
@@ -1073,22 +1060,23 @@ esp_err_t mqtt_core_inject_message(const char *topic, const char *payload)
     if (!topic || !payload) {
         return ESP_ERR_INVALID_ARG;
     }
-    bool auto_handled = automation_engine_handle_mqtt(topic, payload);
     event_bus_type_t type = find_type_by_topic(topic);
-    if (type == EVENT_NONE) {
-        if (!auto_handled) {
-            ESP_LOGW(TAG, "incoming topic not mapped: %s", topic);
-        }
-        return ESP_OK;
+    if (type != EVENT_NONE) {
+        event_bus_message_t typed = {
+            .type = type,
+        };
+        strncpy(typed.topic, topic, sizeof(typed.topic) - 1);
+        strncpy(typed.payload, payload, sizeof(typed.payload) - 1);
+#if MQTT_CORE_DEBUG
+        ESP_LOGI(TAG, "[MQTT IN] %s -> event %d", topic, type);
+#endif
+        event_bus_post(&typed, pdMS_TO_TICKS(100));
     }
 
-    event_bus_message_t msg = {
-        .type = type,
+    event_bus_message_t generic = {
+        .type = EVENT_MQTT_MESSAGE,
     };
-    strncpy(msg.topic, topic, sizeof(msg.topic) - 1);
-    strncpy(msg.payload, payload, sizeof(msg.payload) - 1);
-#if MQTT_CORE_DEBUG
-    ESP_LOGI(TAG, "[MQTT IN] %s -> event %d", topic, type);
-#endif
-    return event_bus_post(&msg, pdMS_TO_TICKS(100));
+    strncpy(generic.topic, topic, sizeof(generic.topic) - 1);
+    strncpy(generic.payload, payload, sizeof(generic.payload) - 1);
+    return event_bus_post(&generic, pdMS_TO_TICKS(100));
 }

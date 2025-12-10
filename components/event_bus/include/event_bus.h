@@ -8,13 +8,13 @@ typedef enum {
     EVENT_NONE = 0,
     EVENT_CARD_OK,
     EVENT_CARD_BAD,
-    EVENT_LASER_TRIGGER,
     EVENT_RELAY_CMD,
     EVENT_AUDIO_PLAY,
     EVENT_VOLUME_SET,
     EVENT_WEB_COMMAND,
     EVENT_SYSTEM_STATUS,
     EVENT_DEVICE_CONFIG_CHANGED,
+    EVENT_MQTT_MESSAGE,
 } event_bus_type_t;
 
 typedef struct {

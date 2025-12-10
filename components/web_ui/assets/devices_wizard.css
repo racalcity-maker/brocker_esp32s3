@@ -62,3 +62,4 @@
 .dw-run-status{font-size:13px;margin-top:6px;}
 .dw-chip{display:inline-flex;align-items:center;gap:4px;padding:4px 8px;border-radius:999px;background:#1d2433;color:#e2e8f0;font-size:11px;}
 .dw-list-empty{padding:12px;color:#94a3b8;font-size:12px;}
+.dw-slot-last .dw-last-value{border:1px dashed #1f2430;border-radius:8px;padding:6px 10px;background:#04060e;color:#94a3b8;font-size:12px;}

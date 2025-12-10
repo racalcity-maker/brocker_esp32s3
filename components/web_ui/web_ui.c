@@ -24,10 +24,9 @@
 #include "mqtt_core.h"
 #include "device_manager.h"
 #include "automation_engine.h"
+#include "dm_template_runtime.h"
+#include "cJSON.h"
 
-#include "web_ui_pictures.h"
-#include "web_ui_laser.h"
-#include "web_ui_robot.h"
 #include "web_ui_page.h"
 #include "web_ui_utils.h"
 #include "web_ui_devices.h"
@@ -36,18 +35,82 @@ static const char *TAG = "web_ui";
 static httpd_handle_t s_server = NULL;
 static SemaphoreHandle_t s_scan_mutex = NULL;
 
-typedef struct {
-    const char *key;
-    const char *label;
-    const char *type;
-    const char *description;
-} device_variable_desc_t;
+static esp_err_t devices_templates_handler(httpd_req_t *req);
+static char *build_uid_monitor_json(void);
+static char *dup_empty_json_array(void)
+{
+    char *buf = malloc(3);
+    if (!buf) {
+        return NULL;
+    }
+    memcpy(buf, "[]", 3);
+    return buf;
+}
 
-static const device_variable_desc_t k_device_variables[] = {
-    {"pictures.result_state", "Pictures result state", "string", "Either 'ok' or 'fail' after verification"},
-    {"pictures.result_track", "Pictures result track", "string", "Audio track used for current pictures result"},
-    {"laser.result_track", "Laser relay track", "string", "Audio track triggered when laser completes hold"},
-};
+static char *build_uid_monitor_json(void)
+{
+    const device_manager_config_t *cfg = device_manager_get();
+    if (!cfg) {
+        return dup_empty_json_array();
+    }
+    cJSON *root = cJSON_CreateArray();
+    if (!root) {
+        return dup_empty_json_array();
+    }
+    for (uint8_t i = 0; i < cfg->device_count && i < DEVICE_MANAGER_MAX_DEVICES; ++i) {
+        const device_descriptor_t *dev = &cfg->devices[i];
+        if (!dev->template_assigned || dev->template_config.type != DM_TEMPLATE_TYPE_UID) {
+            continue;
+        }
+        cJSON *dev_obj = cJSON_CreateObject();
+        if (!dev_obj) {
+            cJSON_Delete(root);
+            return dup_empty_json_array();
+        }
+        cJSON_AddStringToObject(dev_obj, "id", dev->id);
+        cJSON_AddStringToObject(dev_obj, "name", dev->display_name[0] ? dev->display_name : dev->id);
+        cJSON *slot_arr = cJSON_AddArrayToObject(dev_obj, "slots");
+        if (!slot_arr) {
+            cJSON_Delete(root);
+            return dup_empty_json_array();
+        }
+        dm_uid_runtime_snapshot_t snapshot;
+        bool have_snapshot = (dm_template_runtime_get_uid_snapshot(dev->id, &snapshot) == ESP_OK);
+        const dm_uid_template_t *tpl = &dev->template_config.data.uid;
+        uint8_t slot_count = tpl->slot_count;
+        if (slot_count > DM_UID_TEMPLATE_MAX_SLOTS) {
+            slot_count = DM_UID_TEMPLATE_MAX_SLOTS;
+        }
+        for (uint8_t s = 0; s < slot_count; ++s) {
+            const dm_uid_slot_t *slot_cfg = &tpl->slots[s];
+            if (!slot_cfg->source_id[0]) {
+                continue;
+            }
+            cJSON *slot_obj = cJSON_CreateObject();
+            if (!slot_obj) {
+                cJSON_Delete(root);
+                return dup_empty_json_array();
+            }
+            cJSON_AddNumberToObject(slot_obj, "index", s);
+            cJSON_AddStringToObject(slot_obj, "source", slot_cfg->source_id);
+            if (slot_cfg->label[0]) {
+                cJSON_AddStringToObject(slot_obj, "label", slot_cfg->label);
+            }
+            if (have_snapshot && s < snapshot.slot_count && snapshot.slots[s].has_value &&
+                snapshot.slots[s].last_value[0]) {
+                cJSON_AddStringToObject(slot_obj, "last_value", snapshot.slots[s].last_value);
+            }
+            cJSON_AddItemToArray(slot_arr, slot_obj);
+        }
+        cJSON_AddItemToArray(root, dev_obj);
+    }
+    char *printed = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (!printed) {
+        return dup_empty_json_array();
+    }
+    return printed;
+}
 
 
 static esp_err_t ping_handler(httpd_req_t *req)
@@ -111,25 +174,6 @@ static esp_err_t wifi_scan_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
-static void on_event_bus(const event_bus_message_t *msg)
-{
-    if (!msg || msg->type != EVENT_WEB_COMMAND) {
-        return;
-    }
-    const char *t = msg->topic;
-    if (strncmp(t, "pictures/scan/", 14) == 0) {
-        int idx = atoi(t + 14) - 1;
-        web_ui_pictures_handle_scan(idx, msg->payload);
-    } else if (strncmp(t, "pictures/cmd/scan1", 19) == 0) {
-        ESP_LOGI(TAG, "pictures scan1 trigger -> request scan cycle");
-        web_ui_pictures_request_force_cycle();
-    } else if (strncmp(t, "pictures/check", 14) == 0) {
-        web_ui_pictures_handle_check();
-    } else if (strncmp(t, "laser/laserOn", 13) == 0) {
-        web_ui_laser_handle_heartbeat(msg->payload);
-    }
-}
-
 static esp_err_t status_handler(httpd_req_t *req)
 {
     const app_config_t *cfg = config_store_get();
@@ -138,13 +182,15 @@ static esp_err_t status_handler(httpd_req_t *req)
     if (esp_netif_get_ip_info(esp_netif_get_handle_from_ifkey("WIFI_STA_DEF"), &ip) == ESP_OK && ip.ip.addr != 0) {
         snprintf(ip_buf, sizeof(ip_buf), IPSTR, IP2STR(&ip.ip));
     }
+    char *uid_json = build_uid_monitor_json();
     const char *fmt =
         "{\"wifi\":{\"ssid\":\"%s\",\"host\":\"%s\",\"sta_ip\":\"%s\",\"ap\":%s},"
         "\"mqtt\":{\"id\":\"%s\",\"port\":%d,\"keepalive\":%d},"
         "\"audio\":{\"volume\":%d,\"playing\":%s,\"paused\":%s,\"progress\":%d,\"pos_ms\":%d,\"dur_ms\":%d,"
         "\"bitrate\":%d,\"path\":\"%s\",\"message\":\"%s\",\"fmt\":%d},"
         "\"sd\":{\"ok\":%s,\"total\":%llu,\"free\":%llu},"
-        "\"clients\":{\"total\":%u,\"pictures\":%u,\"laser\":%u,\"robot\":%u}}";
+        "\"clients\":{\"total\":%u},"
+        "\"uid_monitor\":%s}";
     mqtt_client_stats_t stats;
     mqtt_core_get_client_stats(&stats);
     audio_player_status_t a_status;
@@ -169,13 +215,20 @@ static esp_err_t status_handler(httpd_req_t *req)
                           sd_ok ? "true" : "false",
                           (unsigned long long)sd_total,
                           (unsigned long long)sd_free,
-                          stats.total, stats.pictures, stats.laser, stats.robot);
+                          stats.total,
+                          uid_json ? uid_json : "[]");
     if (needed < 0) {
+        if (uid_json) {
+            free(uid_json);
+        }
         return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "status format err");
     }
     size_t buf_len = (size_t)needed + 1;
     char *buf = heap_caps_malloc(buf_len, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!buf) {
+        if (uid_json) {
+            free(uid_json);
+        }
         return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no mem");
     }
     snprintf(buf, buf_len, fmt,
@@ -194,9 +247,13 @@ static esp_err_t status_handler(httpd_req_t *req)
              sd_ok ? "true" : "false",
              (unsigned long long)sd_total,
              (unsigned long long)sd_free,
-             stats.total, stats.pictures, stats.laser, stats.robot);
+             stats.total,
+             uid_json ? uid_json : "[]");
     esp_err_t res = web_ui_send_ok(req, "application/json", buf);
     heap_caps_free(buf);
+    if (uid_json) {
+        free(uid_json);
+    }
     return res;
 }
 
@@ -352,25 +409,7 @@ static esp_err_t devices_profile_activate_handler(httpd_req_t *req)
 
 static esp_err_t devices_variables_handler(httpd_req_t *req)
 {
-    httpd_resp_set_type(req, "application/json");
-    char buf[256];
-    httpd_resp_send_chunk(req, "[", 1);
-    for (size_t i = 0; i < sizeof(k_device_variables) / sizeof(k_device_variables[0]); ++i) {
-        const device_variable_desc_t *desc = &k_device_variables[i];
-        int len = snprintf(buf, sizeof(buf),
-                           "%s{\"key\":\"%s\",\"label\":\"%s\",\"type\":\"%s\",\"description\":\"%s\"}",
-                           (i == 0) ? "" : ",",
-                           desc->key, desc->label, desc->type, desc->description);
-        if (len < 0) {
-            len = 0;
-        } else if ((size_t)len >= sizeof(buf)) {
-            len = sizeof(buf) - 1;
-        }
-        httpd_resp_send_chunk(req, buf, len);
-    }
-    httpd_resp_send_chunk(req, "]", 1);
-    httpd_resp_send_chunk(req, NULL, 0);
-    return ESP_OK;
+    return web_ui_send_ok(req, "application/json", "[]");
 }
 
 static esp_err_t wifi_config_handler(httpd_req_t *req)
@@ -727,6 +766,7 @@ static esp_err_t start_httpd(void)
     httpd_uri_t devices_profile_rename = {.uri = "/api/devices/profile/rename", .method = HTTP_POST, .handler = devices_profile_rename_handler};
     httpd_uri_t devices_profile_activate = {.uri = "/api/devices/profile/activate", .method = HTTP_POST, .handler = devices_profile_activate_handler};
     httpd_uri_t devices_variables = {.uri = "/api/devices/variables", .method = HTTP_GET, .handler = devices_variables_handler};
+    httpd_uri_t devices_templates = {.uri = "/api/devices/templates", .method = HTTP_GET, .handler = devices_templates_handler};
 
     httpd_register_uri_handler(s_server, &root);
     httpd_register_uri_handler(s_server, &ping);
@@ -751,19 +791,13 @@ static esp_err_t start_httpd(void)
     httpd_register_uri_handler(s_server, &devices_profile_rename);
     httpd_register_uri_handler(s_server, &devices_profile_activate);
     httpd_register_uri_handler(s_server, &devices_variables);
+    httpd_register_uri_handler(s_server, &devices_templates);
 
-    ESP_RETURN_ON_ERROR(web_ui_pictures_register(s_server), TAG, "pictures register failed");
-    ESP_RETURN_ON_ERROR(web_ui_laser_register(s_server), TAG, "laser register failed");
-    ESP_RETURN_ON_ERROR(web_ui_robot_register(s_server), TAG, "robot register failed");
     return ESP_OK;
 }
 
 esp_err_t web_ui_init(void)
 {
-    ESP_RETURN_ON_ERROR(web_ui_pictures_init(), TAG, "pictures init failed");
-    ESP_RETURN_ON_ERROR(web_ui_laser_init(), TAG, "laser init failed");
-    ESP_RETURN_ON_ERROR(web_ui_robot_init(), TAG, "robot init failed");
-    ESP_RETURN_ON_ERROR(event_bus_register_handler(on_event_bus), TAG, "event handler reg failed");
     return ESP_OK;
 }
 
@@ -777,3 +811,34 @@ esp_err_t web_ui_start(void)
 }
 
 
+static esp_err_t devices_templates_handler(httpd_req_t *req)
+{
+    size_t count = 0;
+    const dm_template_descriptor_t *templates = dm_template_registry_get_all(&count);
+    cJSON *root = cJSON_CreateArray();
+    if (!root) {
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no mem");
+    }
+    for (size_t i = 0; i < count; ++i) {
+        const dm_template_descriptor_t *tpl = &templates[i];
+        cJSON *obj = cJSON_CreateObject();
+        if (!obj) {
+            cJSON_Delete(root);
+            return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no mem");
+        }
+        cJSON_AddStringToObject(obj, "id", tpl->id);
+        cJSON_AddStringToObject(obj, "label", tpl->label);
+        cJSON_AddStringToObject(obj, "description", tpl->description);
+        cJSON_AddStringToObject(obj, "type", dm_template_type_to_string(tpl->type));
+        cJSON_AddItemToArray(root, obj);
+    }
+    char *json = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (!json) {
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no mem");
+    }
+    httpd_resp_set_type(req, "application/json");
+    esp_err_t res = httpd_resp_send(req, json, HTTPD_RESP_USE_STRLEN);
+    free(json);
+    return res;
+}

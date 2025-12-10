@@ -1,85 +1,15 @@
 (() => {
 const TAB_TYPES = [
   {value: 'audio', label: 'Audio'},
-  {value: 'pictures', label: 'Pictures'},
-  {value: 'laser', label: 'Laser'},
-  {value: 'robot', label: 'Robot'},
   {value: 'custom', label: 'Custom'},
 ];
-const ACTION_TYPES = ['mqtt_publish','audio_play','audio_stop','laser_trigger','set_flag','wait_flags','loop','delay','event','nop'];
+const ACTION_TYPES = ['mqtt_publish','audio_play','audio_stop','set_flag','wait_flags','loop','delay','event','nop'];
+const TEMPLATE_TYPES = [
+  {value: '', label: 'No template'},
+  {value: 'uid_validator', label: 'UID validator'},
+  {value: 'signal_hold', label: 'Signal hold'},
+];
 const WIZARD_TEMPLATES = {
-  pictures_reaction: {
-    label: 'Pictures Reaction',
-    description: 'Runs MQTT/audio actions when pictures verification succeeds or fails.',
-    defaults: {
-      deviceName: 'Pictures Reaction',
-      okTopic: 'pictures/lightsgreen',
-      okPayload: 'ok',
-      okTrack: '/sdcard/sounds/ok.mp3',
-      failTopic: 'pictures/lightsred',
-      failPayload: 'fail',
-      failTrack: '/sdcard/sounds/fail.mp3',
-    },
-    fields: [
-      {name: 'okTopic', label: 'OK MQTT topic', placeholder: 'pictures/lightsgreen'},
-      {name: 'okPayload', label: 'OK payload', placeholder: 'ok'},
-      {name: 'okTrack', label: 'OK audio track (optional)', placeholder: '/sdcard/...'},
-      {name: 'failTopic', label: 'Fail MQTT topic', placeholder: 'pictures/lightsred'},
-      {name: 'failPayload', label: 'Fail payload', placeholder: 'fail'},
-      {name: 'failTrack', label: 'Fail audio track (optional)', placeholder: '/sdcard/...'},
-    ],
-    build(base, data) {
-      const okSteps = [
-        createMqttStep(data.okTopic || 'pictures/lightsgreen', data.okPayload || 'ok'),
-      ];
-      if (data.okTrack) {
-        okSteps.push(createAudioStep(data.okTrack));
-      }
-      const failSteps = [
-        createMqttStep(data.failTopic || 'pictures/lightsred', data.failPayload || 'fail'),
-      ];
-      if (data.failTrack) {
-        failSteps.push(createAudioStep(data.failTrack));
-      }
-      base.scenarios = [
-        {id: 'pictures_ok', name: 'Pictures OK', steps: okSteps},
-        {id: 'pictures_fail', name: 'Pictures FAIL', steps: failSteps},
-      ];
-      return base;
-    },
-  },
-  laser_guard: {
-    label: 'Laser Guard',
-    description: 'Triggers relay/audio when laser capture condition is met.',
-    defaults: {
-      deviceName: 'Laser Guard',
-      relayTopic: 'relay/relayOn',
-      relayPayload: 'on',
-      robotTopic: 'robot/laser/relayOn.mp3',
-      robotPayload: '/sdcard/laser/relayOn.mp3',
-      audioTrack: '/sdcard/laser/relayOn.mp3',
-    },
-    fields: [
-      {name: 'relayTopic', label: 'Relay MQTT topic', placeholder: 'relay/relayOn'},
-      {name: 'relayPayload', label: 'Relay payload', placeholder: 'on'},
-      {name: 'robotTopic', label: 'Robot MQTT topic', placeholder: 'robot/laser/relayOn.mp3'},
-      {name: 'robotPayload', label: 'Robot payload', placeholder: '/sdcard/...'},
-      {name: 'audioTrack', label: 'Local audio track (optional)', placeholder: '/sdcard/...'},
-    ],
-    build(base, data) {
-      const steps = [
-        createMqttStep(data.relayTopic || 'relay/relayOn', data.relayPayload || 'on'),
-        createMqttStep(data.robotTopic || 'robot/laser/relayOn.mp3', data.robotPayload || '/sdcard/laser/relayOn.mp3'),
-      ];
-      if (data.audioTrack) {
-        steps.push(createAudioStep(data.audioTrack));
-      }
-      base.scenarios = [
-        {id: 'laser_trigger', name: 'Laser Trigger', steps},
-      ];
-      return base;
-    },
-  },
   blank_device: {
     label: 'Blank Device',
     description: 'Start from a minimal empty device and edit details manually.',
@@ -253,6 +183,8 @@ function handleDetailClick(ev) {
     case 'step-down': moveStep(btn.dataset.index, 1); break;
     case 'add-wait-rule': addWaitRule(btn.dataset.stepIndex); break;
     case 'remove-wait-rule': removeWaitRule(btn.dataset.stepIndex, btn.dataset.reqIndex); break;
+    case 'slot-add': addTemplateSlot(); break;
+    case 'slot-remove': removeTemplateSlot(btn.dataset.index); break;
   }
 }
 
@@ -279,6 +211,10 @@ function handleDetailInput(ev) {
     updateStepField(el.dataset.index, el.dataset.stepField, el);
     return;
   }
+  if (el.dataset.templateField) {
+    updateTemplateField(el);
+    return;
+  }
   if (el.dataset.waitField) {
     updateWaitField(el.dataset.stepIndex, el.dataset.reqIndex, el.dataset.waitField, el);
   }
@@ -293,7 +229,7 @@ function loadModel() {
       return r.json();
     })
     .then(cfg => {
-      state.model = cfg || {};
+      state.model = normalizeLoadedConfig(cfg || {});
       state.selectedDevice = (cfg.devices && cfg.devices.length) ? 0 : -1;
       state.selectedScenario = -1;
       state.dirty = false;
@@ -312,10 +248,11 @@ function saveModel() {
   if (!state.model || state.busy) return;
   setStatus('Saving...', '#fbbf24');
   state.busy = true;
+  const payload = prepareConfigForSave(state.model);
   fetch('/api/devices/apply', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify(state.model),
+    body: JSON.stringify(payload),
   })
     .then(r => {
       if (!r.ok) throw new Error('HTTP ' + r.status);
@@ -418,10 +355,87 @@ function renderDeviceDetail() {
         <input data-device-field="display_name" value="${escapeAttr(dev.display_name || dev.name || '')}" placeholder="Visible name">
       </div>
     </div>
+    ${renderTemplateSection(dev)}
     ${renderTabsSection(dev)}
     ${renderTopicsSection(dev)}
     ${renderScenariosSection(dev)}
   `;
+}
+
+function renderTemplateSection(dev) {
+  const tplType = dev.template?.type || '';
+  const options = TEMPLATE_TYPES.map((tpl) => `<option value="${tpl.value}" ${tpl.value === tplType ? 'selected' : ''}>${tpl.label}</option>`).join('');
+  let body = "<div class='dw-empty small'>Template is not set.</div>";
+  if (tplType === 'uid_validator') {
+    body = renderUidTemplate(dev);
+  } else if (tplType === 'signal_hold') {
+    body = renderSignalTemplate(dev);
+  }
+  return `
+    <div class="dw-section">
+      <div class="dw-section-head">
+        <h4>Template</h4>
+      </div>
+      <div class="dw-field">
+        <label>Template type</label>
+        <select data-template-field="type">${options}</select>
+      </div>
+      ${body}
+    </div>`;
+}
+
+function renderUidTemplate(dev) {
+  ensureUidTemplate(dev);
+  const tpl = dev.template?.uid || {slots: []};
+  const slots = (tpl.slots || []).map((slot, idx) => {
+    const last = slot.last_value ? escapeAttr(slot.last_value) : '';
+    return `
+    <div class="dw-slot">
+      <div class="dw-slot-head">Slot ${idx + 1}<button class="danger small" data-action="slot-remove" data-index="${idx}">&times;</button></div>
+      <div class="dw-field"><label>Source topic</label><input data-template-field="uid-slot" data-subfield="source_id" data-index="${idx}" value="${escapeAttr(slot.source_id || '')}" placeholder="sensor/topic"></div>
+      <div class="dw-field"><label>Label</label><input data-template-field="uid-slot" data-subfield="label" data-index="${idx}" value="${escapeAttr(slot.label || '')}" placeholder="Friendly label"></div>
+      <div class="dw-field"><label>Allowed values</label><input data-template-field="uid-values" data-index="${idx}" value="${escapeAttr((slot.values || []).join(', '))}" placeholder="uid1, uid2"></div>
+      <div class="dw-field dw-slot-last"><label>Last read</label><div class="dw-last-value">${last || '&mdash;'}</div></div>
+    </div>`;
+  }).join('');
+  return `
+    <div class="dw-section">
+      <div class="dw-section-head">
+        <span>UID slots</span>
+        <button data-action="slot-add">Add slot</button>
+      </div>
+      ${slots || "<div class='dw-empty small'>No slots configured.</div>"}
+    </div>
+    <div class="dw-section">
+      <h5>Success actions</h5>
+      <div class="dw-field"><label>MQTT topic</label><input data-template-field="uid-action" data-subfield="success_topic" value="${escapeAttr(tpl.success_topic || '')}" placeholder="quest/ok"></div>
+      <div class="dw-field"><label>Payload</label><input data-template-field="uid-action" data-subfield="success_payload" value="${escapeAttr(tpl.success_payload || '')}" placeholder="payload"></div>
+      <div class="dw-field"><label>Audio track</label><input data-template-field="uid-action" data-subfield="success_audio_track" value="${escapeAttr(tpl.success_audio_track || '')}" placeholder="/sdcard/ok.mp3"></div>
+    </div>
+    <div class="dw-section">
+      <h5>Fail actions</h5>
+      <div class="dw-field"><label>MQTT topic</label><input data-template-field="uid-action" data-subfield="fail_topic" value="${escapeAttr(tpl.fail_topic || '')}" placeholder="quest/fail"></div>
+      <div class="dw-field"><label>Payload</label><input data-template-field="uid-action" data-subfield="fail_payload" value="${escapeAttr(tpl.fail_payload || '')}" placeholder="payload"></div>
+      <div class="dw-field"><label>Audio track</label><input data-template-field="uid-action" data-subfield="fail_audio_track" value="${escapeAttr(tpl.fail_audio_track || '')}" placeholder="/sdcard/fail.mp3"></div>
+    </div>`;
+}
+
+function renderSignalTemplate(dev) {
+  ensureSignalTemplate(dev);
+  const sig = dev.template?.signal || {};
+  return `
+    <div class="dw-section">
+      <h5>Signal control</h5>
+      <div class="dw-field"><label>Signal topic</label><input data-template-field="signal" data-subfield="signal_topic" value="${escapeAttr(sig.signal_topic || '')}" placeholder="quest/relay/cmd"></div>
+      <div class="dw-field"><label>Payload ON</label><input data-template-field="signal" data-subfield="signal_payload_on" value="${escapeAttr(sig.signal_payload_on || '')}" placeholder="ON"></div>
+      <div class="dw-field"><label>Payload OFF</label><input data-template-field="signal" data-subfield="signal_payload_off" value="${escapeAttr(sig.signal_payload_off || '')}" placeholder="OFF"></div>
+      <div class="dw-field"><label>Heartbeat topic</label><input data-template-field="signal" data-subfield="heartbeat_topic" value="${escapeAttr(sig.heartbeat_topic || '')}" placeholder="quest/relay/hb"></div>
+      <div class="dw-field"><label>Required hold ms</label><input type="number" data-template-field="signal" data-subfield="required_hold_ms" value="${sig.required_hold_ms || 0}"></div>
+      <div class="dw-field"><label>Heartbeat timeout ms</label><input type="number" data-template-field="signal" data-subfield="heartbeat_timeout_ms" value="${sig.heartbeat_timeout_ms || 0}"></div>
+      <div class="dw-field"><label>Hold track</label><input data-template-field="signal" data-subfield="hold_track" value="${escapeAttr(sig.hold_track || '')}" placeholder="/sdcard/hold.mp3"></div>
+      <div class="dw-field"><label>Loop hold track</label><select data-template-field="signal" data-subfield="hold_track_loop"><option value="false" ${sig.hold_track_loop ? '' : 'selected'}>No</option><option value="true" ${sig.hold_track_loop ? 'selected' : ''}>Yes</option></select></div>
+      <div class="dw-field"><label>Complete track</label><input data-template-field="signal" data-subfield="complete_track" value="${escapeAttr(sig.complete_track || '')}" placeholder="/sdcard/done.mp3"></div>
+    </div>`;
 }
 
 function renderTabsSection(dev) {
@@ -665,6 +679,59 @@ function updateTopicField(indexStr, field, value) {
   markDirty();
 }
 
+function updateTemplateField(el) {
+  const dev = currentDevice();
+  if (!dev) return;
+  const field = el.dataset.templateField;
+  switch (field) {
+    case 'type':
+      setDeviceTemplate(dev, el.value);
+      return;
+    case 'uid-slot': {
+      ensureUidTemplate(dev);
+      const idx = parseInt(el.dataset.index, 10);
+      if (!dev.template?.uid || Number.isNaN(idx) || !dev.template.uid.slots[idx]) {
+        return;
+      }
+      const sub = el.dataset.subfield;
+      dev.template.uid.slots[idx][sub] = el.value;
+      break;
+    }
+    case 'uid-values': {
+      ensureUidTemplate(dev);
+      const idx = parseInt(el.dataset.index, 10);
+      if (!dev.template?.uid || Number.isNaN(idx) || !dev.template.uid.slots[idx]) {
+        return;
+      }
+      dev.template.uid.slots[idx].values = el.value.split(',').map((v) => v.trim()).filter(Boolean);
+      break;
+    }
+    case 'uid-action': {
+      ensureUidTemplate(dev);
+      if (!dev.template?.uid) return;
+      const sub = el.dataset.subfield;
+      dev.template.uid[sub] = el.value;
+      break;
+    }
+    case 'signal': {
+      ensureSignalTemplate(dev);
+      if (!dev.template?.signal) return;
+      const sub = el.dataset.subfield;
+      if (sub === 'required_hold_ms' || sub === 'heartbeat_timeout_ms') {
+        dev.template.signal[sub] = parseInt(el.value, 10) || 0;
+      } else if (sub === 'hold_track_loop') {
+        dev.template.signal[sub] = el.value === 'true';
+      } else {
+        dev.template.signal[sub] = el.value;
+      }
+      break;
+    }
+    default:
+      return;
+  }
+  markDirty();
+}
+
 function updateScenarioField(field, value) {
   const scen = currentScenario();
   if (!scen) return;
@@ -713,6 +780,132 @@ function updateWaitField(stepIdxStr, reqIdxStr, field, el) {
   markDirty();
 }
 
+function setDeviceTemplate(dev, type) {
+  if (!dev) return;
+  let nextType = type || '';
+  if (nextType !== 'uid_validator' && nextType !== 'signal_hold') {
+    dev.template = null;
+    markDirty();
+    renderDeviceDetail();
+    return;
+  }
+  if (!dev.template || dev.template.type !== nextType) {
+    if (nextType === 'uid_validator') {
+      dev.template = {
+        type: nextType,
+        uid: defaultUidTemplate(),
+      };
+    } else if (nextType === 'signal_hold') {
+      dev.template = {
+        type: nextType,
+        signal: defaultSignalTemplate(),
+      };
+    }
+  }
+  if (nextType === 'uid_validator') {
+    ensureUidTemplate(dev);
+  } else if (nextType === 'signal_hold') {
+    ensureSignalTemplate(dev);
+  }
+  markDirty();
+  renderDeviceDetail();
+}
+
+function defaultUidTemplate() {
+  return {
+    slots: [],
+    success_topic: '',
+    success_payload: '',
+    success_audio_track: '',
+    fail_topic: '',
+    fail_payload: '',
+    fail_audio_track: '',
+  };
+}
+
+function defaultSignalTemplate() {
+  return {
+    signal_topic: '',
+    signal_payload_on: '',
+    signal_payload_off: '',
+    signal_on_ms: 0,
+    heartbeat_topic: '',
+    required_hold_ms: 0,
+    heartbeat_timeout_ms: 0,
+    hold_track: '',
+    hold_track_loop: false,
+    complete_track: '',
+  };
+}
+
+function ensureUidTemplate(dev) {
+  if (!dev || !dev.template || dev.template.type !== 'uid_validator') {
+    return;
+  }
+  if (!dev.template.uid) {
+    dev.template.uid = defaultUidTemplate();
+  }
+  const tpl = dev.template.uid;
+  if (!Array.isArray(tpl.slots)) {
+    tpl.slots = [];
+  }
+  tpl.slots.forEach((slot) => {
+    slot.source_id = slot.source_id || '';
+    slot.label = slot.label || '';
+    if (!Array.isArray(slot.values)) {
+      slot.values = [];
+    }
+  });
+  ['success_topic','success_payload','success_audio_track','fail_topic','fail_payload','fail_audio_track'].forEach((key) => {
+    if (typeof tpl[key] !== 'string') {
+      tpl[key] = '';
+    }
+  });
+}
+
+function ensureSignalTemplate(dev) {
+  if (!dev || !dev.template || dev.template.type !== 'signal_hold') {
+    return;
+  }
+  if (!dev.template.signal) {
+    dev.template.signal = defaultSignalTemplate();
+  }
+  const sig = dev.template.signal;
+  ['signal_topic','signal_payload_on','signal_payload_off','heartbeat_topic','hold_track','complete_track'].forEach((key) => {
+    sig[key] = sig[key] || '';
+  });
+  sig.required_hold_ms = sig.required_hold_ms || 0;
+  sig.heartbeat_timeout_ms = sig.heartbeat_timeout_ms || 0;
+  sig.hold_track_loop = !!sig.hold_track_loop;
+  sig.signal_on_ms = sig.signal_on_ms || 0;
+}
+
+function addTemplateSlot() {
+  const dev = currentDevice();
+  if (!dev || dev.template?.type !== 'uid_validator') {
+    return;
+  }
+  ensureUidTemplate(dev);
+  dev.template.uid.slots.push({source_id: '', label: '', values: []});
+  markDirty();
+  renderDeviceDetail();
+}
+
+function removeTemplateSlot(indexStr) {
+  const dev = currentDevice();
+  if (!dev || dev.template?.type !== 'uid_validator') {
+    return;
+  }
+  ensureUidTemplate(dev);
+  const idx = parseInt(indexStr, 10);
+  if (Number.isNaN(idx) || idx < 0) {
+    return;
+  }
+  dev.template.uid.slots.splice(idx, 1);
+  markDirty();
+  renderDeviceDetail();
+}
+
 function addWaitRule(stepIdxStr) {
   const idx = parseInt(stepIdxStr, 10);
   const scen = currentScenario();
@@ -746,6 +939,217 @@ function normalizeValue(value, type) {
   if (value === 'true') return true;
   if (value === 'false') return false;
   return value;
+}
+
+function normalizeLoadedConfig(cfg) {
+  const model = cfg && typeof cfg === 'object' ? cfg : {devices: []};
+  if (!Array.isArray(model.devices)) {
+    model.devices = [];
+  }
+  model.devices.forEach(normalizeDevice);
+  return model;
+}
+
+function normalizeDevice(dev) {
+  if (!dev || typeof dev !== 'object') return;
+  if (!Array.isArray(dev.scenarios)) {
+    dev.scenarios = [];
+  }
+  dev.scenarios.forEach(normalizeScenario);
+}
+
+function normalizeScenario(scen) {
+  if (!scen || typeof scen !== 'object') return;
+  if (!Array.isArray(scen.steps)) {
+    scen.steps = [];
+  }
+  scen.steps.forEach(normalizeStepForEditing);
+}
+
+function normalizeStepForEditing(step) {
+  if (!step || typeof step !== 'object') return;
+  step.data = step.data || {};
+  switch (step.type) {
+    case 'mqtt_publish': {
+      const mqtt = step.data.mqtt = step.data.mqtt || {};
+      if (mqtt.topic === undefined) mqtt.topic = step.topic || '';
+      if (mqtt.payload === undefined) mqtt.payload = step.payload || '';
+      if (mqtt.qos === undefined) mqtt.qos = typeof step.qos === 'number' ? step.qos : 0;
+      if (mqtt.retain === undefined) mqtt.retain = !!step.retain;
+      break;
+    }
+    case 'audio_play': {
+      const audio = step.data.audio = step.data.audio || {};
+      if (audio.track === undefined) audio.track = step.track || '';
+      if (audio.blocking === undefined) audio.blocking = !!step.blocking;
+      break;
+    }
+    case 'set_flag': {
+      const flag = step.data.flag = step.data.flag || {};
+      if (flag.flag === undefined) flag.flag = step.flag || '';
+      if (flag.value === undefined) flag.value = step.value !== undefined ? !!step.value : false;
+      break;
+    }
+    case 'wait_flags': {
+      const waitFlags = step.data.wait_flags = step.data.wait_flags || {};
+      if (waitFlags.mode === undefined) waitFlags.mode = (step.wait && step.wait.mode) || 'all';
+      if (waitFlags.timeout_ms === undefined) {
+        waitFlags.timeout_ms = (step.wait && step.wait.timeout_ms) ? step.wait.timeout_ms : 0;
+      }
+      const requirements = Array.isArray(waitFlags.requirements)
+        ? waitFlags.requirements
+        : (step.wait && Array.isArray(step.wait.requirements) ? step.wait.requirements : []);
+      waitFlags.requirements = requirements.map(req => ({
+        flag: req.flag || '',
+        required_state: req.required_state !== undefined ? !!req.required_state : !!req.state,
+      }));
+      break;
+    }
+    case 'loop': {
+      const loop = step.data.loop = step.data.loop || {};
+      if (loop.target_step === undefined) {
+        loop.target_step = (step.loop && typeof step.loop.target_step === 'number') ? step.loop.target_step : 0;
+      }
+      if (loop.max_iterations === undefined) {
+        loop.max_iterations = (step.loop && typeof step.loop.max_iterations === 'number') ? step.loop.max_iterations : 0;
+      }
+      break;
+    }
+    case 'event': {
+      const event = step.data.event = step.data.event || {};
+      if (event.event === undefined) event.event = step.event || '';
+      if (event.topic === undefined) event.topic = step.topic || '';
+      if (event.payload === undefined) event.payload = step.payload || '';
+      break;
+    }
+    default:
+      break;
+  }
+}
+
+function prepareConfigForSave(model) {
+  const snapshot = JSON.parse(JSON.stringify(model || {}));
+  if (!Array.isArray(snapshot.devices)) {
+    snapshot.devices = [];
+  }
+  snapshot.devices.forEach((dev, devIdx) => {
+    if (!dev || typeof dev !== 'object') return;
+    if (!Array.isArray(dev.scenarios)) {
+      snapshot.devices[devIdx].scenarios = [];
+      return;
+    }
+    snapshot.devices[devIdx].scenarios = dev.scenarios.map(serializeScenarioForSave);
+    stripTemplateRuntimeFields(snapshot.devices[devIdx]);
+  });
+  return snapshot;
+}
+
+function serializeScenarioForSave(scen) {
+  const next = Object.assign({}, scen);
+  if (!Array.isArray(scen.steps)) {
+    next.steps = [];
+  } else {
+    next.steps = scen.steps.map(serializeStepForSave);
+  }
+  return next;
+}
+
+function serializeStepForSave(step) {
+  const safe = step || {};
+  const out = {
+    type: safe.type || 'nop',
+    delay_ms: toInt(safe.delay_ms),
+  };
+  switch (out.type) {
+    case 'mqtt_publish': {
+      const mqtt = (safe.data && safe.data.mqtt) || {};
+      out.topic = mqtt.topic || '';
+      out.payload = mqtt.payload || '';
+      out.qos = clamp(intOrDefault(mqtt.qos), 0, 2);
+      out.retain = !!mqtt.retain;
+      break;
+    }
+    case 'audio_play': {
+      const audio = (safe.data && safe.data.audio) || {};
+      out.track = audio.track || '';
+      out.blocking = !!audio.blocking;
+      break;
+    }
+    case 'set_flag': {
+      const flag = (safe.data && safe.data.flag) || {};
+      out.flag = flag.flag || '';
+      out.value = !!flag.value;
+      break;
+    }
+    case 'wait_flags': {
+      const wf = (safe.data && safe.data.wait_flags) || {};
+      const wait = {
+        mode: wf.mode === 'any' ? 'any' : 'all',
+        timeout_ms: toInt(wf.timeout_ms),
+        requirements: [],
+      };
+      (wf.requirements || []).forEach(req => {
+        if (!req) return;
+        wait.requirements.push({
+          flag: req.flag || '',
+          state: req.required_state !== undefined ? !!req.required_state : !!req.state,
+        });
+      });
+      out.wait = wait;
+      break;
+    }
+    case 'loop': {
+      const loop = (safe.data && safe.data.loop) || {};
+      out.loop = {
+        target_step: toInt(loop.target_step),
+        max_iterations: toInt(loop.max_iterations),
+      };
+      break;
+    }
+    case 'event': {
+      const event = (safe.data && safe.data.event) || {};
+      out.event = event.event || '';
+      out.topic = event.topic || '';
+      out.payload = event.payload || '';
+      break;
+    }
+    case 'audio_stop':
+    case 'delay':
+    case 'nop':
+    default:
+      break;
+  }
+  return out;
+}
+
+function stripTemplateRuntimeFields(dev) {
+  if (!dev || !dev.template) {
+    return;
+  }
+  if (dev.template.uid && Array.isArray(dev.template.uid.slots)) {
+    dev.template.uid.slots.forEach((slot) => {
+      if (slot && Object.prototype.hasOwnProperty.call(slot, 'last_value')) {
+        delete slot.last_value;
+      }
+    });
+  }
+}
+
+function toInt(value) {
+  const n = parseInt(value, 10);
+  return isNaN(n) ? 0 : n;
+}
+
+function intOrDefault(value, fallback) {
+  const n = parseInt(value, 10);
+  if (isNaN(n)) {
+    return typeof fallback === 'number' ? fallback : 0;
+  }
+  return n;
+}
+
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
 }
 
 function addDevice() {

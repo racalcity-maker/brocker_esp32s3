@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include <inttypes.h>
 #include <ctype.h>
+#include <stdio.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
@@ -18,9 +19,10 @@
 #include "event_bus.h"
 #include "mqtt_core.h"
 
-#define AUTOMATION_QUEUE_LENGTH 8
+#define AUTOMATION_QUEUE_LENGTH 16
 #define AUTOMATION_WORKER_STACK 4096
 #define AUTOMATION_WORKER_PRIO 5
+#define AUTOMATION_WORKER_COUNT 2
 #define AUTOMATION_FLAG_CAPACITY (DEVICE_MANAGER_MAX_DEVICES * DEVICE_MANAGER_MAX_SCENARIOS_PER_DEVICE)
 #define AUTOMATION_RELOAD_LOCK_TIMEOUT pdMS_TO_TICKS(200)
 #define AUTOMATION_TRIGGER_CAPACITY (DEVICE_MANAGER_MAX_DEVICES * DEVICE_MANAGER_MAX_TOPICS_PER_DEVICE)
@@ -52,7 +54,7 @@ static SemaphoreHandle_t s_trigger_mutex = NULL;
 static QueueHandle_t s_job_queue = NULL;
 static automation_flag_t s_flags[AUTOMATION_FLAG_CAPACITY];
 static SemaphoreHandle_t s_flag_mutex = NULL;
-static TaskHandle_t s_worker = NULL;
+static TaskHandle_t s_workers[AUTOMATION_WORKER_COUNT] = {0};
 static SemaphoreHandle_t s_context_mutex = NULL;
 
 typedef struct {
@@ -71,7 +73,6 @@ typedef struct {
 static const automation_event_map_t s_event_map[] = {
     {"card_ok", EVENT_CARD_OK},
     {"card_bad", EVENT_CARD_BAD},
-    {"laser_trigger", EVENT_LASER_TRIGGER},
     {"relay_cmd", EVENT_RELAY_CMD},
     {"audio_play", EVENT_AUDIO_PLAY},
     {"volume_set", EVENT_VOLUME_SET},
@@ -277,9 +278,18 @@ esp_err_t automation_engine_init(void)
 
 esp_err_t automation_engine_start(void)
 {
-    if (!s_worker) {
-        BaseType_t ok = xTaskCreate(automation_worker, "automation", AUTOMATION_WORKER_STACK, NULL, AUTOMATION_WORKER_PRIO, &s_worker);
-        ESP_RETURN_ON_FALSE(ok == pdPASS, ESP_FAIL, TAG, "worker create failed");
+    for (size_t i = 0; i < AUTOMATION_WORKER_COUNT; ++i) {
+        if (!s_workers[i]) {
+            char name[16];
+            snprintf(name, sizeof(name), "automation%u", (unsigned)i);
+            BaseType_t ok = xTaskCreate(automation_worker,
+                                        name,
+                                        AUTOMATION_WORKER_STACK,
+                                        NULL,
+                                        AUTOMATION_WORKER_PRIO,
+                                        &s_workers[i]);
+            ESP_RETURN_ON_FALSE(ok == pdPASS, ESP_FAIL, TAG, "worker %u create failed", (unsigned)i);
+        }
     }
     automation_engine_reload();
     return ESP_OK;
@@ -452,13 +462,6 @@ static void automation_execute_job(const automation_job_t *job)
         case DEVICE_ACTION_AUDIO_STOP:
             audio_player_stop();
             break;
-        case DEVICE_ACTION_LASER_TRIGGER: {
-            event_bus_message_t msg = {
-                .type = EVENT_LASER_TRIGGER,
-            };
-            event_bus_post(&msg, 0);
-            break;
-        }
         case DEVICE_ACTION_SET_FLAG:
             automation_set_flag(step->data.flag.flag, step->data.flag.value);
             break;
@@ -512,8 +515,17 @@ static void automation_handle_event(const event_bus_message_t *msg)
     if (!msg) {
         return;
     }
-    if (msg->type == EVENT_DEVICE_CONFIG_CHANGED) {
+    switch (msg->type) {
+    case EVENT_DEVICE_CONFIG_CHANGED:
         automation_engine_reload();
+        break;
+    case EVENT_MQTT_MESSAGE:
+        if (msg->topic[0]) {
+            automation_engine_handle_mqtt(msg->topic, msg->payload);
+        }
+        break;
+    default:
+        break;
     }
 }
 
