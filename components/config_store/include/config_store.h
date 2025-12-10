@@ -4,7 +4,7 @@
 
 #include "esp_err.h"
 
-#define CONFIG_STORE_MAX_MQTT_USERS   12
+#define CONFIG_STORE_MAX_MQTT_USERS   16
 #define CONFIG_STORE_CLIENT_ID_MAX    32
 #define CONFIG_STORE_USERNAME_MAX     32
 #define CONFIG_STORE_PASSWORD_MAX     32

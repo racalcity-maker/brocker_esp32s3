@@ -12,6 +12,7 @@ Firmware for the “Broker” controller: an ESP32-S3 based automation hub that 
 - **Automation engine** capable of MQTT publish, audio play/stop, flag waits, loops, delays, and event bus steps. Multiple worker tasks prevent a single scenario from blocking the rest.
 - **Audio subsystem** (I2S) for track playback, pause/resume, loop, and synchronization with scenarios.
 - **Documentation** in `docs/` describing device/template setup in EN/RU, plus tests for configuration parsing.
+- **Web & MQTT authentication**: Web UI credentials live in NVS (with a hardware reset pin) and the broker accepts up to 16 MQTT user/password pairs defined in the UI.
 
 ---
 
@@ -21,6 +22,7 @@ Firmware for the “Broker” controller: an ESP32-S3 based automation hub that 
 - SD card wired as `/sdcard` (SPI or SDMMC) for profile storage and large JSON assets.
 - Speaker or amplifier connected to the configured I2S pins.
 - ESP-IDF **5.3.x** (tested with 5.3.3) and its Python toolchain.
+- MQTT clients (devices) must support username/password logins when broker authentication is enabled.
 - Optional: MQTT-capable peripherals (RFID readers, laser heartbeat, relay boards) that will connect to the built-in broker over Wi-Fi.
 
 ---
@@ -37,9 +39,10 @@ idf.py -p COMx flash monitor
 Useful `menuconfig` sections:
 
 - `Broker Configuration -> Wi-Fi`: STA SSID, password, AP fallback.
-- `Broker Configuration -> MQTT`: broker port, keepalive, ACL toggles.
+- `Broker Configuration -> MQTT`: broker port, keepalive, ACL toggles, and credentials for up to 16 MQTT clients.
 - `Broker Configuration -> Audio / I2S`: BCLK, WS, DIN pins, amplifier enable GPIO.
 - `Broker Configuration -> Web UI`: HTTP port, static asset compression.
+- `Broker Configuration -> Web auth`: default username/password plus the GPIO used to reset credentials in the field.
 
 ---
 
@@ -59,7 +62,7 @@ Useful `menuconfig` sections:
 File `components/mqtt_core/mqtt_core.c` implements the server the peripherals connect to:
 
 - Handles CONNECT/SUBSCRIBE/PUBLISH with QoS0/1, retain, and last-will (QoS2/TLS are intentionally omitted to fit the ESP32-S3 profile).
-- Keeps up to 12 client sessions with per-client ACL entries (see `k_acl`). Each entry limits publish and subscribe prefixes; extend the table or add dynamic configuration as needed.
+- Keeps up to 16 client sessions with per-client ACL entries (see `k_acl`). Each entry limits publish and subscribe prefixes; extend the table or add dynamic configuration as needed.
 - Exposes stats in the Status tab (`mqtt_core_get_client_stats`).
 - Bridges events: when a client publishes a topic tied to a template runtime, `dm_template_runtime_handle_mqtt` injects it into the automation engine.
 
@@ -114,6 +117,22 @@ Automation workers pull jobs from a queue, allowing multiple devices to run in p
   - *Wizard* for a guided flow to add templates quickly.
   JSON preview at the bottom shows what will be saved; you can copy it for backups.
 - **Settings**: firmware info, OTA slot, ability to reboot the device, and API links.
+
+### Web UI Authentication
+
+- Default credentials are defined in `menuconfig → Broker Configuration → Web auth` (factory setting: `admin / admin`).
+- On first boot the firmware hashes those values and stores them in NVS. Changing defaults requires either erasing NVS or triggering the hardware reset before a reboot.
+- To recover access in the field, assign any unused GPIO in the same menu and short it to GND for ~10 seconds while the device is running. The log prints `web auth reset pin triggered`, all sessions are cleared, and the defaults become active again.
+- After any password change or reset the firmware deletes existing cookies, so every browser must log in again.
+
+### MQTT Client Authentication
+
+- The broker maintains up to 16 user slots (client ID + username + password). Edit them in the Settings tab (`Broker Configuration → MQTT`) or via `menuconfig`.
+- For each slot set all three fields to enable it. Leaving a client ID empty effectively disables that slot and frees the credential.
+- Credentials are stored in NVS; `config_store` clamps `user_count` to the number of populated entries so unused slots do not waste RAM.
+- Each configured client maps to an ACL entry in `mqtt_core` restricting publish/subscribe prefixes. Expand the ACL table when adding more clients or topics.
+- Devices must supply matching credentials in their MQTT CONNECT packet (client ID + username + password). A mismatch causes the broker to drop the CONNECT before any automation template sees the message.
+- When the hardware reset pin is triggered both the Web UI password and MQTT credential table revert to defaults, so keep an offline copy of production credentials.
 
 ---
 

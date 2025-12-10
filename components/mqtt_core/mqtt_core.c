@@ -24,7 +24,7 @@
 
 static const char *TAG = "mqtt_core";
 
-#define MQTT_MAX_CLIENTS       12
+#define MQTT_MAX_CLIENTS       16
 #define MQTT_MAX_SUBS          8
 #define MQTT_MAX_TOPIC         96
 #define MQTT_MAX_PAYLOAD       512
