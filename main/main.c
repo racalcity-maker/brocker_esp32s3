@@ -23,6 +23,7 @@
 
 static const char *TAG = "app_main";
 
+#if (configUSE_TRACE_FACILITY == 1)
 static void stats_task(void *param)
 {
     (void)param;
@@ -60,6 +61,7 @@ static void stats_task(void *param)
         vTaskDelay(period);
     }
 }
+#endif  // configUSE_TRACE_FACILITY
 
 static void device_manager_boot_task(void *param)
 {
@@ -132,8 +134,12 @@ void app_main(void)
     ESP_LOGI(TAG, "start web_ui");
     web_ui_start();
 
-    ESP_LOGI(TAG, "Broker skeleton started");
+#if (configUSE_TRACE_FACILITY == 1)
     xTaskCreate(stats_task, "stats_task", 4096, NULL, 3, NULL);
+#else
+    ESP_LOGW(TAG, "stats task disabled (configUSE_TRACE_FACILITY not enabled)");
+#endif
+    ESP_LOGI(TAG, "Broker skeleton started");
     ESP_LOGI(TAG, "create device manager bootstrap task");
     xTaskCreate(device_manager_boot_task, "dm_boot", 8192, NULL, 3, NULL);
     vTaskDelete(NULL);
