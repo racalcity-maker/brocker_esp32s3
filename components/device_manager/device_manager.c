@@ -173,17 +173,20 @@ static void register_templates_from_config(device_manager_config_t *cfg)
     if (!cfg) {
         return;
     }
+    ESP_LOGI(TAG, "register_templates_from_config: resetting runtime");
     dm_template_runtime_reset();
     uint8_t limit = cfg->device_capacity ? cfg->device_capacity : DEVICE_MANAGER_MAX_DEVICES;
     for (uint8_t i = 0; i < cfg->device_count && i < limit; ++i) {
         device_descriptor_t *dev = &cfg->devices[i];
         if (dev->template_assigned) {
+            ESP_LOGI(TAG, "registering template for %s (type=%d)", dev->id, dev->template_config.type);
             esp_err_t err = dm_template_runtime_register(&dev->template_config, dev->id);
             if (err != ESP_OK) {
                 ESP_LOGW(TAG, "template runtime register failed for %s: %s", dev->id, esp_err_to_name(err));
             }
         }
     }
+    ESP_LOGI(TAG, "register_templates_from_config: done");
 }
 
 esp_err_t device_manager_init(void)
@@ -344,10 +347,14 @@ esp_err_t device_manager_apply(const device_manager_config_t *next)
     esp_err_t err = persist_locked();
     dm_unlock();
     if (err == ESP_OK) {
+        ESP_LOGI(TAG, "device_manager_apply: config persisted, re-registering templates");
+        register_templates_from_config(s_config);
         event_bus_message_t msg = {
             .type = EVENT_DEVICE_CONFIG_CHANGED,
         };
         event_bus_post(&msg, 0);
+    } else {
+        ESP_LOGE(TAG, "device_manager_apply: persist failed: %s", esp_err_to_name(err));
     }
     return err;
 }

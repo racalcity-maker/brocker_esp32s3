@@ -1,0 +1,25 @@
+menu "Broker Configuration"
+
+config BROKER_WEB_AUTH_DEFAULT_USER
+    string "Default Web UI username"
+    default "admin"
+    help
+        Username used for initial login to the Web UI. Change it
+        after flashing or via the Settings tab.
+
+config BROKER_WEB_AUTH_DEFAULT_PASS
+    string "Default Web UI password"
+    default "admin"
+    help
+        Password used for initial login to the Web UI. After the
+        device boots, change it from the Settings tab.
+
+config BROKER_WEB_AUTH_RESET_GPIO
+    int "Web auth reset GPIO"
+    default -1
+    help
+        When set to a valid GPIO number, holding this pin LOW for
+        ~10 seconds resets the Web UI credentials back to the defaults.
+        Set to -1 to disable the hardware reset feature.
+
+endmenu

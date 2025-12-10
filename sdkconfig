@@ -542,6 +542,14 @@ CONFIG_PARTITION_TABLE_MD5=y
 # end of Partition Table
 
 #
+# Broker Configuration
+#
+CONFIG_BROKER_WEB_AUTH_DEFAULT_USER="admin"
+CONFIG_BROKER_WEB_AUTH_DEFAULT_PASS="admin"
+CONFIG_BROKER_WEB_AUTH_RESET_GPIO=15
+# end of Broker Configuration
+
+#
 # Compiler options
 #
 CONFIG_COMPILER_OPTIMIZATION_DEBUG=y

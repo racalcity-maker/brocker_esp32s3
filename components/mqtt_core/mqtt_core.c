@@ -59,7 +59,7 @@ typedef struct {
     TaskHandle_t task;
     bool active;
     bool closing;
-    char client_id[32];
+    char client_id[CONFIG_STORE_CLIENT_ID_MAX];
     uint16_t keepalive;
     int64_t last_rx_ms;
     mqtt_subscription_t subs[MQTT_MAX_SUBS];
@@ -648,6 +648,31 @@ static int parse_utf8_str(const uint8_t *buf, size_t len, size_t *offset, char *
 
 static void handle_client(void *param);
 
+static bool mqtt_authenticate_client(const char *client_id, const char *username, const char *password)
+{
+    const app_config_t *cfg = config_store_get();
+    if (!cfg) {
+        return false;
+    }
+    if (cfg->mqtt.user_count == 0) {
+        return true;
+    }
+    for (uint8_t i = 0; i < cfg->mqtt.user_count; ++i) {
+        const app_mqtt_user_t *user = &cfg->mqtt.users[i];
+        if (strcmp(user->client_id, client_id) != 0) {
+            continue;
+        }
+        if (strcmp(user->username, username ? username : "") != 0) {
+            continue;
+        }
+        if (strcmp(user->password, password ? password : "") != 0) {
+            continue;
+        }
+        return true;
+    }
+    return false;
+}
+
 static int handle_connect(mqtt_session_t *sess, const uint8_t *buf, size_t len)
 {
     size_t off = 0;
@@ -666,7 +691,7 @@ static int handle_connect(mqtt_session_t *sess, const uint8_t *buf, size_t len)
     uint16_t keepalive = (buf[off] << 8) | buf[off + 1];
     off += 2;
 
-    char client_id[32];
+    char client_id[CONFIG_STORE_CLIENT_ID_MAX];
     if (parse_utf8_str(buf, len, &off, client_id, sizeof(client_id)) != 0) {
         return -1;
     }
@@ -708,17 +733,21 @@ static int handle_connect(mqtt_session_t *sess, const uint8_t *buf, size_t len)
     }
 
     // username/password игнорируем (офсеты пропускаем).
+    char username[CONFIG_STORE_USERNAME_MAX] = {0};
+    char password[CONFIG_STORE_PASSWORD_MAX] = {0};
     if (flags & 0x80) {
-        char user[32];
-        if (parse_utf8_str(buf, len, &off, user, sizeof(user)) != 0) {
+        if (parse_utf8_str(buf, len, &off, username, sizeof(username)) != 0) {
             return -1;
         }
     }
     if (flags & 0x40) {
-        char pass[32];
-        if (parse_utf8_str(buf, len, &off, pass, sizeof(pass)) != 0) {
+        if (parse_utf8_str(buf, len, &off, password, sizeof(password)) != 0) {
             return -1;
         }
+    }
+    if (!mqtt_authenticate_client(client_id, username, password)) {
+        ESP_LOGW(TAG, "MQTT auth failed for client_id=%s", client_id);
+        return -1;
     }
     return 0;
 }
