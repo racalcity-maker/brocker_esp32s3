@@ -20,3 +20,6 @@ __pycache__/
 # OS мусор
 .DS_Store
 Thumbs.db
+# Generated assets
+components/web_ui/assets/devices_wizard.js
+
