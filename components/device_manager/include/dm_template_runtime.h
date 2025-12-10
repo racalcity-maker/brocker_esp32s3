@@ -9,6 +9,7 @@ esp_err_t dm_template_runtime_init(void);
 void dm_template_runtime_reset(void);
 esp_err_t dm_template_runtime_register(const dm_template_config_t *tpl, const char *device_id);
 bool dm_template_runtime_handle_mqtt(const char *topic, const char *payload);
+bool dm_template_runtime_handle_flag(const char *flag_name, bool state);
 typedef struct {
     char device_id[DEVICE_MANAGER_ID_MAX_LEN];
     uint8_t slot_count;

@@ -8,7 +8,11 @@ const TEMPLATE_TYPES = [
   {value: '', label: 'No template'},
   {value: 'uid_validator', label: 'UID validator'},
   {value: 'signal_hold', label: 'Signal hold'},
+  {value: 'on_mqtt_event', label: 'MQTT trigger'},
+  {value: 'on_flag', label: 'Flag trigger'},
 ];
+const MQTT_RULE_LIMIT = 8;
+const FLAG_RULE_LIMIT = 8;
 const WIZARD_TEMPLATES = {
   blank_device: {
     label: 'Blank Device',
@@ -185,6 +189,10 @@ function handleDetailClick(ev) {
     case 'remove-wait-rule': removeWaitRule(btn.dataset.stepIndex, btn.dataset.reqIndex); break;
     case 'slot-add': addTemplateSlot(); break;
     case 'slot-remove': removeTemplateSlot(btn.dataset.index); break;
+    case 'mqtt-rule-add': addMqttRule(); break;
+    case 'mqtt-rule-remove': removeMqttRule(btn.dataset.index); break;
+    case 'flag-rule-add': addFlagRule(); break;
+    case 'flag-rule-remove': removeFlagRule(btn.dataset.index); break;
   }
 }
 
@@ -370,6 +378,10 @@ function renderTemplateSection(dev) {
     body = renderUidTemplate(dev);
   } else if (tplType === 'signal_hold') {
     body = renderSignalTemplate(dev);
+  } else if (tplType === 'on_mqtt_event') {
+    body = renderMqttTemplate(dev);
+  } else if (tplType === 'on_flag') {
+    body = renderFlagTemplate(dev);
   }
   return `
     <div class="dw-section">
@@ -435,6 +447,62 @@ function renderSignalTemplate(dev) {
       <div class="dw-field"><label>Hold track</label><input data-template-field="signal" data-subfield="hold_track" value="${escapeAttr(sig.hold_track || '')}" placeholder="/sdcard/hold.mp3"></div>
       <div class="dw-field"><label>Loop hold track</label><select data-template-field="signal" data-subfield="hold_track_loop"><option value="false" ${sig.hold_track_loop ? '' : 'selected'}>No</option><option value="true" ${sig.hold_track_loop ? 'selected' : ''}>Yes</option></select></div>
       <div class="dw-field"><label>Complete track</label><input data-template-field="signal" data-subfield="complete_track" value="${escapeAttr(sig.complete_track || '')}" placeholder="/sdcard/done.mp3"></div>
+    </div>`;
+}
+
+function renderMqttTemplate(dev) {
+  ensureMqttTemplate(dev);
+  const tpl = dev.template?.mqtt || {rules: []};
+  const rules = (tpl.rules || []).map((rule, idx) => {
+    const checked = rule.payload_required ? 'checked' : '';
+    return `
+    <div class="dw-slot">
+      <div class="dw-slot-head">Rule ${idx + 1}<button class="danger small" data-action="mqtt-rule-remove" data-index="${idx}">&times;</button></div>
+      <div class="dw-field"><label>Name</label><input data-template-field="mqtt-rule" data-subfield="name" data-index="${idx}" value="${escapeAttr(rule.name || '')}" placeholder="Optional"></div>
+      <div class="dw-field"><label>Topic</label><input data-template-field="mqtt-rule" data-subfield="topic" data-index="${idx}" value="${escapeAttr(rule.topic || '')}" placeholder="sensor/topic"></div>
+      <div class="dw-field"><label>Payload</label><input data-template-field="mqtt-rule" data-subfield="payload" data-index="${idx}" value="${escapeAttr(rule.payload || '')}" placeholder="payload"></div>
+      <div class="dw-field dw-checkbox-field"><label><input type="checkbox" data-template-field="mqtt-rule" data-subfield="payload_required" data-index="${idx}" ${checked}>Match payload</label></div>
+      <div class="dw-field"><label>Scenario ID</label><input data-template-field="mqtt-rule" data-subfield="scenario" data-index="${idx}" value="${escapeAttr(rule.scenario || '')}" placeholder="scenario_id"></div>
+    </div>`;
+  }).join('');
+  return `
+    <div class="dw-section">
+      <div class="dw-section-head">
+        <span>MQTT rules</span>
+        <button data-action="mqtt-rule-add">Add rule</button>
+      </div>
+      ${rules || "<div class='dw-empty small'>No rules configured.</div>"}
+      <div class="dw-hint small">Leave payload empty to match any payload.</div>
+    </div>`;
+}
+
+function renderFlagTemplate(dev) {
+  ensureFlagTemplate(dev);
+  const tpl = dev.template?.flag || {rules: []};
+  const rules = (tpl.rules || []).map((rule, idx) => {
+    return `
+    <div class="dw-slot">
+      <div class="dw-slot-head">Rule ${idx + 1}<button class="danger small" data-action="flag-rule-remove" data-index="${idx}">&times;</button></div>
+      <div class="dw-field"><label>Name</label><input data-template-field="flag-rule" data-subfield="name" data-index="${idx}" value="${escapeAttr(rule.name || '')}" placeholder="Optional"></div>
+      <div class="dw-field"><label>Flag</label><input data-template-field="flag-rule" data-subfield="flag" data-index="${idx}" value="${escapeAttr(rule.flag || '')}" placeholder="door_open"></div>
+      <div class="dw-field">
+        <label>Trigger when</label>
+        <select data-template-field="flag-rule" data-subfield="state" data-index="${idx}">
+          <option value="true" ${rule.required_state ? 'selected' : ''}>Flag becomes TRUE</option>
+          <option value="false" ${!rule.required_state ? 'selected' : ''}>Flag becomes FALSE</option>
+        </select>
+      </div>
+      <div class="dw-field"><label>Scenario ID</label><input data-template-field="flag-rule" data-subfield="scenario" data-index="${idx}" value="${escapeAttr(rule.scenario || '')}" placeholder="scenario_id"></div>
+    </div>`;
+  }).join('');
+  return `
+    <div class="dw-section">
+      <div class="dw-section-head">
+        <span>Flag rules</span>
+        <button data-action="flag-rule-add">Add rule</button>
+      </div>
+      ${rules || "<div class='dw-empty small'>No rules configured.</div>"}
+      <div class="dw-hint small">Scenarios must exist on this device and will run when the selected flag changes.</div>
     </div>`;
 }
 
@@ -726,6 +794,34 @@ function updateTemplateField(el) {
       }
       break;
     }
+    case 'mqtt-rule': {
+      ensureMqttTemplate(dev);
+      const tpl = dev.template?.mqtt;
+      if (!tpl) return;
+      const idx = parseInt(el.dataset.index, 10);
+      if (Number.isNaN(idx) || !tpl.rules[idx]) return;
+      const sub = el.dataset.subfield;
+      if (sub === 'payload_required') {
+        tpl.rules[idx].payload_required = el.type === 'checkbox' ? el.checked : el.value === 'true';
+      } else {
+        tpl.rules[idx][sub] = el.value;
+      }
+      break;
+    }
+    case 'flag-rule': {
+      ensureFlagTemplate(dev);
+      const tpl = dev.template?.flag;
+      if (!tpl) return;
+      const idx = parseInt(el.dataset.index, 10);
+      if (Number.isNaN(idx) || !tpl.rules[idx]) return;
+      const sub = el.dataset.subfield;
+      if (sub === 'state') {
+        tpl.rules[idx].required_state = el.value === 'true';
+      } else {
+        tpl.rules[idx][sub] = el.value;
+      }
+      break;
+    }
     default:
       return;
   }
@@ -783,7 +879,8 @@ function updateWaitField(stepIdxStr, reqIdxStr, field, el) {
 function setDeviceTemplate(dev, type) {
   if (!dev) return;
   let nextType = type || '';
-  if (nextType !== 'uid_validator' && nextType !== 'signal_hold') {
+  const allowed = ['uid_validator', 'signal_hold', 'on_mqtt_event', 'on_flag'];
+  if (!allowed.includes(nextType)) {
     dev.template = null;
     markDirty();
     renderDeviceDetail();
@@ -800,12 +897,26 @@ function setDeviceTemplate(dev, type) {
         type: nextType,
         signal: defaultSignalTemplate(),
       };
+    } else if (nextType === 'on_mqtt_event') {
+      dev.template = {
+        type: nextType,
+        mqtt: defaultMqttTemplate(),
+      };
+    } else if (nextType === 'on_flag') {
+      dev.template = {
+        type: nextType,
+        flag: defaultFlagTemplate(),
+      };
     }
   }
   if (nextType === 'uid_validator') {
     ensureUidTemplate(dev);
   } else if (nextType === 'signal_hold') {
     ensureSignalTemplate(dev);
+  } else if (nextType === 'on_mqtt_event') {
+    ensureMqttTemplate(dev);
+  } else if (nextType === 'on_flag') {
+    ensureFlagTemplate(dev);
   }
   markDirty();
   renderDeviceDetail();
@@ -835,6 +946,18 @@ function defaultSignalTemplate() {
     hold_track: '',
     hold_track_loop: false,
     complete_track: '',
+  };
+}
+
+function defaultMqttTemplate() {
+  return {
+    rules: [],
+  };
+}
+
+function defaultFlagTemplate() {
+  return {
+    rules: [],
   };
 }
 
@@ -880,6 +1003,45 @@ function ensureSignalTemplate(dev) {
   sig.signal_on_ms = sig.signal_on_ms || 0;
 }
 
+function ensureMqttTemplate(dev) {
+  if (!dev || !dev.template || dev.template.type !== 'on_mqtt_event') {
+    return;
+  }
+  if (!dev.template.mqtt) {
+    dev.template.mqtt = defaultMqttTemplate();
+  }
+  const tpl = dev.template.mqtt;
+  if (!Array.isArray(tpl.rules)) {
+    tpl.rules = [];
+  }
+  tpl.rules.forEach((rule) => {
+    rule.name = rule.name || '';
+    rule.topic = rule.topic || '';
+    rule.payload = rule.payload || '';
+    rule.scenario = rule.scenario || '';
+    rule.payload_required = !!rule.payload_required;
+  });
+}
+
+function ensureFlagTemplate(dev) {
+  if (!dev || !dev.template || dev.template.type !== 'on_flag') {
+    return;
+  }
+  if (!dev.template.flag) {
+    dev.template.flag = defaultFlagTemplate();
+  }
+  const tpl = dev.template.flag;
+  if (!Array.isArray(tpl.rules)) {
+    tpl.rules = [];
+  }
+  tpl.rules.forEach((rule) => {
+    rule.name = rule.name || '';
+    rule.flag = rule.flag || '';
+    rule.scenario = rule.scenario || '';
+    rule.required_state = rule.required_state !== undefined ? !!rule.required_state : true;
+  });
+}
+
 function addTemplateSlot() {
   const dev = currentDevice();
   if (!dev || dev.template?.type !== 'uid_validator') {
@@ -902,6 +1064,79 @@ function removeTemplateSlot(indexStr) {
     return;
   }
   dev.template.uid.slots.splice(idx, 1);
+  markDirty();
+  renderDeviceDetail();
+}
+
+function addMqttRule() {
+  const dev = currentDevice();
+  if (!dev || dev.template?.type !== 'on_mqtt_event') {
+    return;
+  }
+  ensureMqttTemplate(dev);
+  const tpl = dev.template.mqtt;
+  if (tpl.rules.length >= MQTT_RULE_LIMIT) {
+    setStatus('MQTT rule limit reached', '#fbbf24');
+    return;
+  }
+  tpl.rules.push({
+    name: '',
+    topic: '',
+    payload: '',
+    payload_required: true,
+    scenario: '',
+  });
+  markDirty();
+  renderDeviceDetail();
+}
+
+function removeMqttRule(indexStr) {
+  const dev = currentDevice();
+  if (!dev || dev.template?.type !== 'on_mqtt_event') {
+    return;
+  }
+  ensureMqttTemplate(dev);
+  const idx = parseInt(indexStr, 10);
+  if (Number.isNaN(idx)) {
+    return;
+  }
+  dev.template.mqtt.rules.splice(idx, 1);
+  markDirty();
+  renderDeviceDetail();
+}
+
+function addFlagRule() {
+  const dev = currentDevice();
+  if (!dev || dev.template?.type !== 'on_flag') {
+    return;
+  }
+  ensureFlagTemplate(dev);
+  const tpl = dev.template.flag;
+  if (tpl.rules.length >= FLAG_RULE_LIMIT) {
+    setStatus('Flag rule limit reached', '#fbbf24');
+    return;
+  }
+  tpl.rules.push({
+    name: '',
+    flag: '',
+    scenario: '',
+    required_state: true,
+  });
+  markDirty();
+  renderDeviceDetail();
+}
+
+function removeFlagRule(indexStr) {
+  const dev = currentDevice();
+  if (!dev || dev.template?.type !== 'on_flag') {
+    return;
+  }
+  ensureFlagTemplate(dev);
+  const idx = parseInt(indexStr, 10);
+  if (Number.isNaN(idx)) {
+    return;
+  }
+  dev.template.flag.rules.splice(idx, 1);
   markDirty();
   renderDeviceDetail();
 }

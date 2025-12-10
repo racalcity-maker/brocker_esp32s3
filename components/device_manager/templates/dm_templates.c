@@ -207,3 +207,19 @@ dm_signal_event_t dm_signal_handle_tick(dm_signal_state_t *state,
     event.type = DM_SIGNAL_EVENT_CONTINUE;
     return event;
 }
+
+void dm_mqtt_trigger_template_clear(dm_mqtt_trigger_template_t *tpl)
+{
+    if (!tpl) {
+        return;
+    }
+    memset(tpl, 0, sizeof(*tpl));
+}
+
+void dm_flag_trigger_template_clear(dm_flag_trigger_template_t *tpl)
+{
+    if (!tpl) {
+        return;
+    }
+    memset(tpl, 0, sizeof(*tpl));
+}

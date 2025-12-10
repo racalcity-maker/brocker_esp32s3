@@ -1,20 +1,25 @@
 #include "dm_template_runtime.h"
 
 #include <string.h>
+#include <strings.h>
 
 #include "esp_log.h"
 #include "esp_timer.h"
 
 #include "dm_runtime_uid.h"
 #include "dm_runtime_signal.h"
+#include "dm_runtime_mqtt.h"
+#include "dm_runtime_flag.h"
 #include "device_manager_utils.h"
 #include "audio_player.h"
 #include "automation_engine.h"
 #include "event_bus.h"
 #include "mqtt_core.h"
 
-#define DM_UID_RUNTIME_MAX     4
-#define DM_SIGNAL_RUNTIME_MAX  4
+#define DM_UID_RUNTIME_MAX      4
+#define DM_SIGNAL_RUNTIME_MAX   4
+#define DM_MQTT_RUNTIME_MAX     6
+#define DM_FLAG_RUNTIME_MAX     6
 
 static const char *TAG = "template_runtime";
 
@@ -38,18 +43,58 @@ typedef struct {
 
 static uid_runtime_entry_t s_uid_entries[DM_UID_RUNTIME_MAX];
 static signal_runtime_entry_t s_signal_entries[DM_SIGNAL_RUNTIME_MAX];
+typedef struct {
+    bool in_use;
+    char device_id[DEVICE_MANAGER_ID_MAX_LEN];
+    dm_mqtt_trigger_runtime_t runtime;
+} mqtt_runtime_entry_t;
+
+typedef struct {
+    bool in_use;
+    char device_id[DEVICE_MANAGER_ID_MAX_LEN];
+    dm_flag_trigger_runtime_t runtime;
+} flag_runtime_entry_t;
+
+static mqtt_runtime_entry_t s_mqtt_entries[DM_MQTT_RUNTIME_MAX];
+static flag_runtime_entry_t s_flag_entries[DM_FLAG_RUNTIME_MAX];
 static bool s_event_handler_registered = false;
+
+static bool payload_to_bool(const char *payload)
+{
+    if (!payload) {
+        return false;
+    }
+    if (strcasecmp(payload, "true") == 0 || strcasecmp(payload, "on") == 0 ||
+        strcasecmp(payload, "yes") == 0) {
+        return true;
+    }
+    if (strcmp(payload, "1") == 0) {
+        return true;
+    }
+    return false;
+}
 
 static void template_event_handler(const event_bus_message_t *msg)
 {
-    if (!msg || msg->type != EVENT_MQTT_MESSAGE) {
+    if (!msg) {
         return;
     }
-    if (!msg->topic[0]) {
-        return;
+    switch (msg->type) {
+    case EVENT_MQTT_MESSAGE:
+        if (!msg->topic[0]) {
+            return;
+        }
+        dm_template_runtime_handle_mqtt(msg->topic, msg->payload[0] ? msg->payload : "");
+        break;
+    case EVENT_FLAG_CHANGED:
+        if (!msg->topic[0]) {
+            return;
+        }
+        dm_template_runtime_handle_flag(msg->topic, payload_to_bool(msg->payload));
+        break;
+    default:
+        break;
     }
-    const char *payload = msg->payload[0] ? msg->payload : "";
-    dm_template_runtime_handle_mqtt(msg->topic, payload);
 }
 
 static uid_runtime_entry_t *allocate_uid_entry(void)
@@ -67,6 +112,26 @@ static signal_runtime_entry_t *allocate_signal_entry(void)
     for (size_t i = 0; i < DM_SIGNAL_RUNTIME_MAX; ++i) {
         if (!s_signal_entries[i].in_use) {
             return &s_signal_entries[i];
+        }
+    }
+    return NULL;
+}
+
+static mqtt_runtime_entry_t *allocate_mqtt_entry(void)
+{
+    for (size_t i = 0; i < DM_MQTT_RUNTIME_MAX; ++i) {
+        if (!s_mqtt_entries[i].in_use) {
+            return &s_mqtt_entries[i];
+        }
+    }
+    return NULL;
+}
+
+static flag_runtime_entry_t *allocate_flag_entry(void)
+{
+    for (size_t i = 0; i < DM_FLAG_RUNTIME_MAX; ++i) {
+        if (!s_flag_entries[i].in_use) {
+            return &s_flag_entries[i];
         }
     }
     return NULL;
@@ -92,6 +157,8 @@ esp_err_t dm_template_runtime_init(void)
 {
     memset(s_uid_entries, 0, sizeof(s_uid_entries));
     memset(s_signal_entries, 0, sizeof(s_signal_entries));
+    memset(s_mqtt_entries, 0, sizeof(s_mqtt_entries));
+    memset(s_flag_entries, 0, sizeof(s_flag_entries));
     if (!s_event_handler_registered) {
         esp_err_t err = event_bus_register_handler(template_event_handler);
         if (err != ESP_OK) {
@@ -152,6 +219,42 @@ static esp_err_t register_signal_runtime(const dm_signal_hold_template_t *tpl, c
     return ESP_OK;
 }
 
+static esp_err_t register_mqtt_runtime(const dm_mqtt_trigger_template_t *tpl, const char *device_id)
+{
+    if (!tpl || tpl->rule_count == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    mqtt_runtime_entry_t *entry = allocate_mqtt_entry();
+    if (!entry) {
+        ESP_LOGE(TAG, "no slot for mqtt trigger runtime");
+        return ESP_ERR_NO_MEM;
+    }
+    memset(entry, 0, sizeof(*entry));
+    entry->in_use = true;
+    dm_str_copy(entry->device_id, sizeof(entry->device_id), device_id);
+    dm_mqtt_trigger_runtime_init(&entry->runtime, tpl);
+    ESP_LOGI(TAG, "registered MQTT trigger runtime for %s (%u rules)", entry->device_id, tpl->rule_count);
+    return ESP_OK;
+}
+
+static esp_err_t register_flag_runtime(const dm_flag_trigger_template_t *tpl, const char *device_id)
+{
+    if (!tpl || tpl->rule_count == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    flag_runtime_entry_t *entry = allocate_flag_entry();
+    if (!entry) {
+        ESP_LOGE(TAG, "no slot for flag trigger runtime");
+        return ESP_ERR_NO_MEM;
+    }
+    memset(entry, 0, sizeof(*entry));
+    entry->in_use = true;
+    dm_str_copy(entry->device_id, sizeof(entry->device_id), device_id);
+    dm_flag_trigger_runtime_init(&entry->runtime, tpl);
+    ESP_LOGI(TAG, "registered flag trigger runtime for %s (%u rules)", entry->device_id, tpl->rule_count);
+    return ESP_OK;
+}
+
 esp_err_t dm_template_runtime_register(const dm_template_config_t *tpl, const char *device_id)
 {
     if (!tpl || !device_id) {
@@ -162,6 +265,10 @@ esp_err_t dm_template_runtime_register(const dm_template_config_t *tpl, const ch
         return register_uid_runtime(&tpl->data.uid, device_id);
     case DM_TEMPLATE_TYPE_SIGNAL_HOLD:
         return register_signal_runtime(&tpl->data.signal, device_id);
+    case DM_TEMPLATE_TYPE_MQTT_TRIGGER:
+        return register_mqtt_runtime(&tpl->data.mqtt, device_id);
+    case DM_TEMPLATE_TYPE_FLAG_TRIGGER:
+        return register_flag_runtime(&tpl->data.flag, device_id);
     default:
         return ESP_ERR_NOT_SUPPORTED;
     }
@@ -350,6 +457,36 @@ static bool handle_signal_message(const char *topic)
     return handled;
 }
 
+static bool handle_mqtt_trigger_message(const char *topic, const char *payload)
+{
+    bool handled = false;
+    for (size_t i = 0; i < DM_MQTT_RUNTIME_MAX; ++i) {
+        mqtt_runtime_entry_t *entry = &s_mqtt_entries[i];
+        if (!entry->in_use) {
+            continue;
+        }
+        const dm_mqtt_trigger_rule_t *rule =
+            dm_mqtt_trigger_runtime_match(&entry->runtime, topic, payload);
+        if (!rule) {
+            continue;
+        }
+        handled = true;
+        ESP_LOGI(TAG, "[MQTT trigger] dev=%s topic=%s scenario=%s payload='%s'",
+                 entry->device_id,
+                 topic,
+                 rule->scenario,
+                 payload ? payload : "");
+        esp_err_t err = automation_engine_trigger(entry->device_id, rule->scenario);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "scenario %s/%s failed: %s",
+                     entry->device_id,
+                     rule->scenario,
+                     esp_err_to_name(err));
+        }
+    }
+    return handled;
+}
+
 bool dm_template_runtime_handle_mqtt(const char *topic, const char *payload)
 {
     if (!topic) {
@@ -358,5 +495,39 @@ bool dm_template_runtime_handle_mqtt(const char *topic, const char *payload)
     bool handled = false;
     handled |= handle_uid_message(topic, payload);
     handled |= handle_signal_message(topic);
+    handled |= handle_mqtt_trigger_message(topic, payload);
+    return handled;
+}
+
+bool dm_template_runtime_handle_flag(const char *flag_name, bool state)
+{
+    if (!flag_name) {
+        return false;
+    }
+    bool handled = false;
+    for (size_t i = 0; i < DM_FLAG_RUNTIME_MAX; ++i) {
+        flag_runtime_entry_t *entry = &s_flag_entries[i];
+        if (!entry->in_use) {
+            continue;
+        }
+        const dm_flag_trigger_rule_t *rule =
+            dm_flag_trigger_runtime_handle(&entry->runtime, flag_name, state);
+        if (!rule) {
+            continue;
+        }
+        handled = true;
+        ESP_LOGI(TAG, "[Flag trigger] dev=%s flag=%s state=%d scenario=%s",
+                 entry->device_id,
+                 rule->flag,
+                 (int)state,
+                 rule->scenario);
+        esp_err_t err = automation_engine_trigger(entry->device_id, rule->scenario);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "scenario %s/%s failed: %s",
+                     entry->device_id,
+                     rule->scenario,
+                     esp_err_to_name(err));
+        }
+    }
     return handled;
 }

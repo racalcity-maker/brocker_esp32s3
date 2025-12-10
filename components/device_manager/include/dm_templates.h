@@ -109,3 +109,40 @@ void dm_signal_state_reset(dm_signal_state_t *state);
 dm_signal_event_t dm_signal_handle_tick(dm_signal_state_t *state,
                                         const dm_signal_hold_template_t *tpl,
                                         uint64_t now_ms);
+
+// MQTT trigger template ---------------------------------------------------------
+
+#define DM_MQTT_TRIGGER_MAX_RULES 8
+
+typedef struct {
+    char name[DEVICE_MANAGER_NAME_MAX_LEN];
+    char topic[DEVICE_MANAGER_TOPIC_MAX_LEN];
+    char payload[DEVICE_MANAGER_PAYLOAD_MAX_LEN];
+    char scenario[DEVICE_MANAGER_ID_MAX_LEN];
+    bool payload_required;
+} dm_mqtt_trigger_rule_t;
+
+typedef struct {
+    dm_mqtt_trigger_rule_t rules[DM_MQTT_TRIGGER_MAX_RULES];
+    uint8_t rule_count;
+} dm_mqtt_trigger_template_t;
+
+void dm_mqtt_trigger_template_clear(dm_mqtt_trigger_template_t *tpl);
+
+// Flag trigger template ---------------------------------------------------------
+
+#define DM_FLAG_TRIGGER_MAX_RULES 8
+
+typedef struct {
+    char name[DEVICE_MANAGER_NAME_MAX_LEN];
+    char flag[DEVICE_MANAGER_FLAG_NAME_MAX_LEN];
+    bool required_state;
+    char scenario[DEVICE_MANAGER_ID_MAX_LEN];
+} dm_flag_trigger_rule_t;
+
+typedef struct {
+    dm_flag_trigger_rule_t rules[DM_FLAG_TRIGGER_MAX_RULES];
+    uint8_t rule_count;
+} dm_flag_trigger_template_t;
+
+void dm_flag_trigger_template_clear(dm_flag_trigger_template_t *tpl);

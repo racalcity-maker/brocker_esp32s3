@@ -15,6 +15,18 @@ static const dm_template_descriptor_t s_templates[] = {
         .label = "Signal Hold Timer",
         .description = "Accumulates heartbeat duration and triggers actions when the hold completes.",
     },
+    {
+        .type = DM_TEMPLATE_TYPE_MQTT_TRIGGER,
+        .id = "on_mqtt_event",
+        .label = "MQTT Event Trigger",
+        .description = "Listens for MQTT messages and launches scenarios when payload matches.",
+    },
+    {
+        .type = DM_TEMPLATE_TYPE_FLAG_TRIGGER,
+        .id = "on_flag",
+        .label = "Flag Trigger",
+        .description = "Watches automation flags and triggers scenarios on specific states.",
+    },
 };
 
 const dm_template_descriptor_t *dm_template_registry_get_all(size_t *count)

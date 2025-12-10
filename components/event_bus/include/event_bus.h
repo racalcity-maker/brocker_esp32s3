@@ -15,6 +15,7 @@ typedef enum {
     EVENT_SYSTEM_STATUS,
     EVENT_DEVICE_CONFIG_CHANGED,
     EVENT_MQTT_MESSAGE,
+    EVENT_FLAG_CHANGED,
 } event_bus_type_t;
 
 typedef struct {

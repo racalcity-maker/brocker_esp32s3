@@ -2,6 +2,8 @@
   const LIMITS = {
     devices: 12,
     uidSlots: 8,
+    mqttRules: 8,
+    flagRules: 8,
   };
 
   const state = {
@@ -19,6 +21,8 @@
     templates: [
       {id: 'uid_validator', label: 'UID validator'},
       {id: 'signal_hold', label: 'Signal hold'},
+      {id: 'on_mqtt_event', label: 'MQTT trigger'},
+      {id: 'on_flag', label: 'Flag trigger'},
     ],
   };
 
@@ -99,6 +103,18 @@
         case 'slot-remove':
           removeSlot(parseInt(button.dataset.index, 10));
           break;
+        case 'mqtt-rule-add':
+          addMqttRule();
+          break;
+        case 'mqtt-rule-remove':
+          removeMqttRule(parseInt(button.dataset.index, 10));
+          break;
+        case 'flag-rule-add':
+          addFlagRule();
+          break;
+        case 'flag-rule-remove':
+          removeFlagRule(parseInt(button.dataset.index, 10));
+          break;
         default:
           break;
       }
@@ -141,6 +157,32 @@
       dev.template.uid[target.dataset.subfield] = target.value;
     } else if (target.dataset.field === 'signal') {
       dev.template.signal[target.dataset.subfield] = target.value;
+    } else if (target.dataset.field === 'mqtt-rule') {
+      if (!dev.template || !dev.template.mqtt) return;
+      const idx = parseInt(target.dataset.index, 10);
+      if (Number.isNaN(idx) || !dev.template.mqtt.rules[idx]) {
+        return;
+      }
+      const sub = target.dataset.subfield;
+      if (sub === 'payload_required') {
+        dev.template.mqtt.rules[idx][sub] = target.type === 'checkbox'
+          ? target.checked
+          : target.value === 'true';
+      } else {
+        dev.template.mqtt.rules[idx][sub] = target.value;
+      }
+    } else if (target.dataset.field === 'flag-rule') {
+      if (!dev.template || !dev.template.flag) return;
+      const idx = parseInt(target.dataset.index, 10);
+      if (Number.isNaN(idx) || !dev.template.flag.rules[idx]) {
+        return;
+      }
+      const sub = target.dataset.subfield;
+      if (sub === 'state') {
+        dev.template.flag.rules[idx].required_state = target.value === 'true';
+      } else {
+        dev.template.flag.rules[idx][sub] = target.value;
+      }
     }
     markDirty();
     renderSidebar();
@@ -233,6 +275,10 @@
       html.push(renderUidTemplate(dev));
     } else if (dev.template && dev.template.type === 'signal_hold') {
       html.push(renderSignalTemplate(dev));
+    } else if (dev.template && dev.template.type === 'on_mqtt_event') {
+      html.push(renderMqttTemplate(dev));
+    } else if (dev.template && dev.template.type === 'on_flag') {
+      html.push(renderFlagTemplate(dev));
     } else {
       html.push("<div class='dx-empty'>Assign template to configure behavior.</div>");
     }
@@ -269,6 +315,20 @@
           heartbeat_topic: '',
           required_hold_ms: 0,
           heartbeat_timeout_ms: 0,
+        },
+      };
+    } else if (type === 'on_mqtt_event') {
+      dev.template = {
+        type: type,
+        mqtt: {
+          rules: [],
+        },
+      };
+    } else if (type === 'on_flag') {
+      dev.template = {
+        type: type,
+        flag: {
+          rules: [],
         },
       };
     } else {
@@ -331,10 +391,67 @@
     return html.join('');
   }
 
-  function actionInput(field, name, value, label) {
+  function renderMqttTemplate(dev) {
+    const tpl = dev.template.mqtt || {};
+    tpl.rules = tpl.rules || [];
+    const html = [];
+    html.push("<div class='dx-section'><div class='dx-section-head'>MQTT rules<button data-action='mqtt-rule-add'>Add rule</button></div>");
+    if (!tpl.rules.length) {
+      html.push("<div class='dx-empty'>No rules configured.</div>");
+    } else {
+      tpl.rules.forEach((rule, idx) => {
+        html.push("<div class='dx-slot'>");
+        html.push("<div class='dx-slot-head'>Rule " + (idx + 1) +
+          "<button data-action='mqtt-rule-remove' data-index='" + idx + "'>&times;</button></div>");
+        html.push(actionInput('mqtt-rule', 'name', rule.name || '', 'Name', idx));
+        html.push(actionInput('mqtt-rule', 'topic', rule.topic || '', 'Topic', idx));
+        html.push(actionInput('mqtt-rule', 'payload', rule.payload || '', 'Payload', idx));
+        const checked = rule.payload_required ? ' checked' : '';
+        html.push("<div class='dx-field'><label class='dx-checkbox'><input type='checkbox' data-field='mqtt-rule' data-subfield='payload_required' data-index='" +
+          idx + "'" + checked + ">Match payload exactly</label></div>");
+        html.push(actionInput('mqtt-rule', 'scenario', rule.scenario || '', 'Scenario ID', idx));
+        html.push('</div>');
+      });
+    }
+    html.push("<div class='dx-hint'>Set payload to empty to treat any payload as a match.</div>");
+    html.push('</div>');
+    return html.join('');
+  }
+
+  function renderFlagTemplate(dev) {
+    const tpl = dev.template.flag || {};
+    tpl.rules = tpl.rules || [];
+    const html = [];
+    html.push("<div class='dx-section'><div class='dx-section-head'>Flag rules<button data-action='flag-rule-add'>Add rule</button></div>");
+    if (!tpl.rules.length) {
+      html.push("<div class='dx-empty'>No rules configured.</div>");
+    } else {
+      tpl.rules.forEach((rule, idx) => {
+        html.push("<div class='dx-slot'>");
+        html.push("<div class='dx-slot-head'>Rule " + (idx + 1) +
+          "<button data-action='flag-rule-remove' data-index='" + idx + "'>&times;</button></div>");
+        html.push(actionInput('flag-rule', 'name', rule.name || '', 'Name', idx));
+        html.push(actionInput('flag-rule', 'flag', rule.flag || '', 'Flag name', idx));
+        const selectedTrue = rule.required_state ? ' selected' : '';
+        const selectedFalse = !rule.required_state ? ' selected' : '';
+        html.push("<div class='dx-field'><label>Trigger when</label><select data-field='flag-rule' data-subfield='state' data-index='" + idx + "'>" +
+          "<option value='true'" + selectedTrue + ">Flag becomes TRUE</option>" +
+          "<option value='false'" + selectedFalse + ">Flag becomes FALSE</option></select></div>");
+        html.push(actionInput('flag-rule', 'scenario', rule.scenario || '', 'Scenario ID', idx));
+        html.push('</div>');
+      });
+    }
+    html.push("<div class='dx-hint'>Flags are managed by automation actions; configure scenario IDs on this device.</div>");
+    html.push('</div>');
+    return html.join('');
+  }
+
+  function actionInput(field, name, value, label, index) {
+    const idxAttr = (index !== undefined && index !== null && !Number.isNaN(index))
+      ? " data-index='" + index + "'" : '';
     return "<div class='dx-field'><label>" + label +
-      "</label><input data-field='" + field + "' data-subfield='" + name + "' value='" +
-      escapeHtml(String(value || '')) + "'></div>";
+      "</label><input data-field='" + field + "' data-subfield='" + name + "'" + idxAttr +
+      " value='" + escapeHtml(String(value || '')) + "'></div>";
   }
 
   function selectDevice(idx) {
@@ -397,6 +514,67 @@
       return;
     }
     dev.template.uid.slots.splice(idx, 1);
+    markDirty();
+    renderDetail();
+  }
+
+  function addMqttRule() {
+    const dev = state.devices[state.selectedDevice];
+    if (!dev || !dev.template || dev.template.type !== 'on_mqtt_event') {
+      return;
+    }
+    dev.template.mqtt.rules = dev.template.mqtt.rules || [];
+    if (dev.template.mqtt.rules.length >= LIMITS.mqttRules) {
+      setStatus('Rule limit reached', 'warn');
+      return;
+    }
+    dev.template.mqtt.rules.push({
+      name: '',
+      topic: '',
+      payload: '',
+      scenario: '',
+      payload_required: true,
+    });
+    markDirty();
+    renderDetail();
+  }
+
+  function removeMqttRule(idx) {
+    const dev = state.devices[state.selectedDevice];
+    if (!dev || !dev.template || dev.template.type !== 'on_mqtt_event') {
+      return;
+    }
+    dev.template.mqtt.rules.splice(idx, 1);
+    markDirty();
+    renderDetail();
+  }
+
+  function addFlagRule() {
+    const dev = state.devices[state.selectedDevice];
+    if (!dev || !dev.template || dev.template.type !== 'on_flag') {
+      return;
+    }
+    dev.template.flag.rules = dev.template.flag.rules || [];
+    if (dev.template.flag.rules.length >= LIMITS.flagRules) {
+      setStatus('Rule limit reached', 'warn');
+      return;
+    }
+    dev.template.flag.rules.push({
+      name: '',
+      flag: '',
+      scenario: '',
+      required_state: true,
+    });
+    markDirty();
+    renderDetail();
+  }
+
+  function removeFlagRule(idx) {
+    const dev = state.devices[state.selectedDevice];
+    if (!dev || !dev.template || dev.template.type !== 'on_flag') {
+      return;
+    }
+    dev.template.flag.rules.splice(idx, 1);
     markDirty();
     renderDetail();
   }

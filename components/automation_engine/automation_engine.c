@@ -112,13 +112,26 @@ static void automation_set_flag(const char *name, bool value)
         }
     }
     if (slot) {
-        if (!slot->in_use) {
+        bool changed = true;
+        if (slot->in_use) {
+            changed = (slot->value != value);
+        } else {
             strncpy(slot->name, name, sizeof(slot->name) - 1);
             slot->name[sizeof(slot->name) - 1] = 0;
             slot->in_use = true;
         }
         slot->value = value;
         ESP_LOGD(TAG, "flag %s=%d", slot->name, value);
+        if (changed) {
+            event_bus_message_t msg = {
+                .type = EVENT_FLAG_CHANGED,
+            };
+            strncpy(msg.topic, slot->name, sizeof(msg.topic) - 1);
+            strncpy(msg.payload, value ? "true" : "false", sizeof(msg.payload) - 1);
+            msg.topic[sizeof(msg.topic) - 1] = 0;
+            msg.payload[sizeof(msg.payload) - 1] = 0;
+            event_bus_post(&msg, pdMS_TO_TICKS(20));
+        }
     } else {
         ESP_LOGW(TAG, "no flag slot for %s", name);
     }

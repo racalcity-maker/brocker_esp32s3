@@ -6,6 +6,8 @@
 typedef enum {
     DM_TEMPLATE_TYPE_UID = 0,
     DM_TEMPLATE_TYPE_SIGNAL_HOLD,
+    DM_TEMPLATE_TYPE_MQTT_TRIGGER,
+    DM_TEMPLATE_TYPE_FLAG_TRIGGER,
     DM_TEMPLATE_TYPE_COUNT,
 } dm_template_type_t;
 
@@ -21,6 +23,8 @@ typedef struct {
     union {
         dm_uid_template_t uid;
         dm_signal_hold_template_t signal;
+        dm_mqtt_trigger_template_t mqtt;
+        dm_flag_trigger_template_t flag;
     } data;
 } dm_template_config_t;
 
