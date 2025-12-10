@@ -5,6 +5,7 @@
 
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "esp_heap_caps.h"
 
 #include "dm_runtime_uid.h"
 #include "dm_runtime_signal.h"
@@ -18,64 +19,57 @@
 #include "event_bus.h"
 #include "mqtt_core.h"
 
-#define DM_UID_RUNTIME_MAX       4
-#define DM_SIGNAL_RUNTIME_MAX    4
-#define DM_MQTT_RUNTIME_MAX      6
-#define DM_FLAG_RUNTIME_MAX      6
-#define DM_CONDITION_RUNTIME_MAX 6
-#define DM_INTERVAL_RUNTIME_MAX  6
-
 static const char *TAG = "template_runtime";
 
-typedef struct {
-    bool in_use;
+typedef struct uid_runtime_entry {
     char device_id[DEVICE_MANAGER_ID_MAX_LEN];
     dm_uid_runtime_t runtime;
     char topics[DM_UID_TEMPLATE_MAX_SLOTS][DEVICE_MANAGER_TOPIC_MAX_LEN];
     size_t topic_count;
+    struct uid_runtime_entry *next;
 } uid_runtime_entry_t;
 
-typedef struct {
-    bool in_use;
+typedef struct signal_runtime_entry {
     char device_id[DEVICE_MANAGER_ID_MAX_LEN];
     dm_signal_runtime_t runtime;
     char heartbeat_topic[DEVICE_MANAGER_TOPIC_MAX_LEN];
     bool hold_started;
     bool hold_paused;
     bool hold_active;
+    struct signal_runtime_entry *next;
 } signal_runtime_entry_t;
 
-static uid_runtime_entry_t s_uid_entries[DM_UID_RUNTIME_MAX];
-static signal_runtime_entry_t s_signal_entries[DM_SIGNAL_RUNTIME_MAX];
-typedef struct {
-    bool in_use;
+typedef struct mqtt_runtime_entry {
     char device_id[DEVICE_MANAGER_ID_MAX_LEN];
     dm_mqtt_trigger_runtime_t runtime;
+    struct mqtt_runtime_entry *next;
 } mqtt_runtime_entry_t;
 
-typedef struct {
-    bool in_use;
+typedef struct flag_runtime_entry {
     char device_id[DEVICE_MANAGER_ID_MAX_LEN];
     dm_flag_trigger_runtime_t runtime;
+    struct flag_runtime_entry *next;
 } flag_runtime_entry_t;
 
-static mqtt_runtime_entry_t s_mqtt_entries[DM_MQTT_RUNTIME_MAX];
-static flag_runtime_entry_t s_flag_entries[DM_FLAG_RUNTIME_MAX];
-typedef struct {
-    bool in_use;
+typedef struct condition_runtime_entry {
     char device_id[DEVICE_MANAGER_ID_MAX_LEN];
     dm_condition_runtime_t runtime;
+    struct condition_runtime_entry *next;
 } condition_runtime_entry_t;
 
-typedef struct {
-    bool in_use;
+typedef struct interval_runtime_entry {
     char device_id[DEVICE_MANAGER_ID_MAX_LEN];
     dm_interval_task_runtime_t runtime;
     esp_timer_handle_t timer;
+    struct interval_runtime_entry *next;
 } interval_runtime_entry_t;
 
-static condition_runtime_entry_t s_condition_entries[DM_CONDITION_RUNTIME_MAX];
-static interval_runtime_entry_t s_interval_entries[DM_INTERVAL_RUNTIME_MAX];
+static uid_runtime_entry_t *s_uid_entries;
+static signal_runtime_entry_t *s_signal_entries;
+static mqtt_runtime_entry_t *s_mqtt_entries;
+static flag_runtime_entry_t *s_flag_entries;
+static condition_runtime_entry_t *s_condition_entries;
+static interval_runtime_entry_t *s_interval_entries;
 static bool s_event_handler_registered = false;
 
 static bool payload_to_bool(const char *payload)
@@ -116,77 +110,83 @@ static void template_event_handler(const event_bus_message_t *msg)
     }
 }
 
-static uid_runtime_entry_t *allocate_uid_entry(void)
+static void *runtime_alloc(size_t size)
 {
-    for (size_t i = 0; i < DM_UID_RUNTIME_MAX; ++i) {
-        if (!s_uid_entries[i].in_use) {
-            return &s_uid_entries[i];
-        }
+    void *ptr = heap_caps_calloc(1, size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!ptr) {
+        ptr = heap_caps_calloc(1, size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     }
-    return NULL;
+    return ptr;
 }
 
-static signal_runtime_entry_t *allocate_signal_entry(void)
+static void free_uid_entries(void)
 {
-    for (size_t i = 0; i < DM_SIGNAL_RUNTIME_MAX; ++i) {
-        if (!s_signal_entries[i].in_use) {
-            return &s_signal_entries[i];
-        }
+    uid_runtime_entry_t *entry = s_uid_entries;
+    while (entry) {
+        uid_runtime_entry_t *next = entry->next;
+        heap_caps_free(entry);
+        entry = next;
     }
-    return NULL;
+    s_uid_entries = NULL;
 }
 
-static mqtt_runtime_entry_t *allocate_mqtt_entry(void)
+static void free_signal_entries(void)
 {
-    for (size_t i = 0; i < DM_MQTT_RUNTIME_MAX; ++i) {
-        if (!s_mqtt_entries[i].in_use) {
-            return &s_mqtt_entries[i];
-        }
+    signal_runtime_entry_t *entry = s_signal_entries;
+    while (entry) {
+        signal_runtime_entry_t *next = entry->next;
+        heap_caps_free(entry);
+        entry = next;
     }
-    return NULL;
+    s_signal_entries = NULL;
 }
 
-static flag_runtime_entry_t *allocate_flag_entry(void)
+static void free_mqtt_entries(void)
 {
-    for (size_t i = 0; i < DM_FLAG_RUNTIME_MAX; ++i) {
-        if (!s_flag_entries[i].in_use) {
-            return &s_flag_entries[i];
-        }
+    mqtt_runtime_entry_t *entry = s_mqtt_entries;
+    while (entry) {
+        mqtt_runtime_entry_t *next = entry->next;
+        heap_caps_free(entry);
+        entry = next;
     }
-    return NULL;
+    s_mqtt_entries = NULL;
 }
 
-static condition_runtime_entry_t *allocate_condition_entry(void)
+static void free_flag_entries(void)
 {
-    for (size_t i = 0; i < DM_CONDITION_RUNTIME_MAX; ++i) {
-        if (!s_condition_entries[i].in_use) {
-            return &s_condition_entries[i];
-        }
+    flag_runtime_entry_t *entry = s_flag_entries;
+    while (entry) {
+        flag_runtime_entry_t *next = entry->next;
+        heap_caps_free(entry);
+        entry = next;
     }
-    return NULL;
+    s_flag_entries = NULL;
 }
 
-static interval_runtime_entry_t *allocate_interval_entry(void)
+static void free_condition_entries(void)
 {
-    for (size_t i = 0; i < DM_INTERVAL_RUNTIME_MAX; ++i) {
-        if (!s_interval_entries[i].in_use) {
-            return &s_interval_entries[i];
-        }
+    condition_runtime_entry_t *entry = s_condition_entries;
+    while (entry) {
+        condition_runtime_entry_t *next = entry->next;
+        heap_caps_free(entry);
+        entry = next;
     }
-    return NULL;
+    s_condition_entries = NULL;
 }
 
-static void reset_interval_entries(void)
+static void free_interval_entries(void)
 {
-    for (size_t i = 0; i < DM_INTERVAL_RUNTIME_MAX; ++i) {
-        interval_runtime_entry_t *entry = &s_interval_entries[i];
+    interval_runtime_entry_t *entry = s_interval_entries;
+    while (entry) {
+        interval_runtime_entry_t *next = entry->next;
         if (entry->timer) {
             esp_timer_stop(entry->timer);
             esp_timer_delete(entry->timer);
-            entry->timer = NULL;
         }
-        memset(entry, 0, sizeof(*entry));
+        heap_caps_free(entry);
+        entry = next;
     }
+    s_interval_entries = NULL;
 }
 
 static const char *uid_event_str(dm_uid_event_type_t type)
@@ -207,12 +207,12 @@ static const char *uid_event_str(dm_uid_event_type_t type)
 
 esp_err_t dm_template_runtime_init(void)
 {
-    memset(s_uid_entries, 0, sizeof(s_uid_entries));
-    memset(s_signal_entries, 0, sizeof(s_signal_entries));
-    memset(s_mqtt_entries, 0, sizeof(s_mqtt_entries));
-    memset(s_flag_entries, 0, sizeof(s_flag_entries));
-    memset(s_condition_entries, 0, sizeof(s_condition_entries));
-    reset_interval_entries();
+    free_uid_entries();
+    free_signal_entries();
+    free_mqtt_entries();
+    free_flag_entries();
+    free_condition_entries();
+    free_interval_entries();
     if (!s_event_handler_registered) {
         esp_err_t err = event_bus_register_handler(template_event_handler);
         if (err != ESP_OK) {
@@ -234,19 +234,19 @@ static esp_err_t register_uid_runtime(const dm_uid_template_t *tpl, const char *
     if (!tpl || tpl->slot_count == 0) {
         return ESP_ERR_INVALID_ARG;
     }
-    uid_runtime_entry_t *entry = allocate_uid_entry();
+    uid_runtime_entry_t *entry = runtime_alloc(sizeof(*entry));
     if (!entry) {
-        ESP_LOGE(TAG, "no slot for uid runtime");
+        ESP_LOGE(TAG, "no memory for uid runtime");
         return ESP_ERR_NO_MEM;
     }
-    memset(entry, 0, sizeof(*entry));
-    entry->in_use = true;
     dm_str_copy(entry->device_id, sizeof(entry->device_id), device_id);
     dm_uid_runtime_init(&entry->runtime, tpl);
     entry->topic_count = tpl->slot_count;
     for (uint8_t i = 0; i < tpl->slot_count && i < DM_UID_TEMPLATE_MAX_SLOTS; ++i) {
         dm_str_copy(entry->topics[i], sizeof(entry->topics[i]), tpl->slots[i].source_id);
     }
+    entry->next = s_uid_entries;
+    s_uid_entries = entry;
     ESP_LOGI(TAG, "registered UID runtime for device %s with %zu slots", entry->device_id, entry->topic_count);
     return ESP_OK;
 }
@@ -256,19 +256,19 @@ static esp_err_t register_signal_runtime(const dm_signal_hold_template_t *tpl, c
     if (!tpl || !tpl->heartbeat_topic[0]) {
         return ESP_ERR_INVALID_ARG;
     }
-    signal_runtime_entry_t *entry = allocate_signal_entry();
+    signal_runtime_entry_t *entry = runtime_alloc(sizeof(*entry));
     if (!entry) {
-        ESP_LOGE(TAG, "no slot for signal runtime");
+        ESP_LOGE(TAG, "no memory for signal runtime");
         return ESP_ERR_NO_MEM;
     }
-    memset(entry, 0, sizeof(*entry));
-    entry->in_use = true;
     dm_str_copy(entry->device_id, sizeof(entry->device_id), device_id);
     dm_signal_runtime_init(&entry->runtime, tpl);
     dm_str_copy(entry->heartbeat_topic, sizeof(entry->heartbeat_topic), tpl->heartbeat_topic);
     entry->hold_started = false;
     entry->hold_paused = false;
     entry->hold_active = false;
+    entry->next = s_signal_entries;
+    s_signal_entries = entry;
     ESP_LOGI(TAG, "registered signal runtime for device %s topic %s", entry->device_id, entry->heartbeat_topic);
     return ESP_OK;
 }
@@ -278,15 +278,15 @@ static esp_err_t register_mqtt_runtime(const dm_mqtt_trigger_template_t *tpl, co
     if (!tpl || tpl->rule_count == 0) {
         return ESP_ERR_INVALID_ARG;
     }
-    mqtt_runtime_entry_t *entry = allocate_mqtt_entry();
+    mqtt_runtime_entry_t *entry = runtime_alloc(sizeof(*entry));
     if (!entry) {
-        ESP_LOGE(TAG, "no slot for mqtt trigger runtime");
+        ESP_LOGE(TAG, "no memory for mqtt trigger runtime");
         return ESP_ERR_NO_MEM;
     }
-    memset(entry, 0, sizeof(*entry));
-    entry->in_use = true;
     dm_str_copy(entry->device_id, sizeof(entry->device_id), device_id);
     dm_mqtt_trigger_runtime_init(&entry->runtime, tpl);
+    entry->next = s_mqtt_entries;
+    s_mqtt_entries = entry;
     ESP_LOGI(TAG, "registered MQTT trigger runtime for %s (%u rules)", entry->device_id, tpl->rule_count);
     return ESP_OK;
 }
@@ -296,15 +296,15 @@ static esp_err_t register_flag_runtime(const dm_flag_trigger_template_t *tpl, co
     if (!tpl || tpl->rule_count == 0) {
         return ESP_ERR_INVALID_ARG;
     }
-    flag_runtime_entry_t *entry = allocate_flag_entry();
+    flag_runtime_entry_t *entry = runtime_alloc(sizeof(*entry));
     if (!entry) {
-        ESP_LOGE(TAG, "no slot for flag trigger runtime");
+        ESP_LOGE(TAG, "no memory for flag trigger runtime");
         return ESP_ERR_NO_MEM;
     }
-    memset(entry, 0, sizeof(*entry));
-    entry->in_use = true;
     dm_str_copy(entry->device_id, sizeof(entry->device_id), device_id);
     dm_flag_trigger_runtime_init(&entry->runtime, tpl);
+    entry->next = s_flag_entries;
+    s_flag_entries = entry;
     ESP_LOGI(TAG, "registered flag trigger runtime for %s (%u rules)", entry->device_id, tpl->rule_count);
     return ESP_OK;
 }
@@ -314,15 +314,15 @@ static esp_err_t register_condition_runtime(const dm_condition_template_t *tpl, 
     if (!tpl || tpl->rule_count == 0) {
         return ESP_ERR_INVALID_ARG;
     }
-    condition_runtime_entry_t *entry = allocate_condition_entry();
+    condition_runtime_entry_t *entry = runtime_alloc(sizeof(*entry));
     if (!entry) {
-        ESP_LOGE(TAG, "no slot for condition runtime");
+        ESP_LOGE(TAG, "no memory for condition runtime");
         return ESP_ERR_NO_MEM;
     }
-    memset(entry, 0, sizeof(*entry));
-    entry->in_use = true;
     dm_str_copy(entry->device_id, sizeof(entry->device_id), device_id);
     dm_condition_runtime_init(&entry->runtime, tpl);
+    entry->next = s_condition_entries;
+    s_condition_entries = entry;
     ESP_LOGI(TAG, "registered condition runtime for %s (%u rules)", entry->device_id, tpl->rule_count);
     return ESP_OK;
 }
@@ -330,7 +330,7 @@ static esp_err_t register_condition_runtime(const dm_condition_template_t *tpl, 
 static void interval_timer_callback(void *arg)
 {
     interval_runtime_entry_t *entry = (interval_runtime_entry_t *)arg;
-    if (!entry || !entry->in_use) {
+    if (!entry) {
         return;
     }
     const char *scenario = entry->runtime.config.scenario;
@@ -353,13 +353,11 @@ static esp_err_t register_interval_runtime(const dm_interval_task_template_t *tp
     if (!tpl || tpl->interval_ms == 0 || !tpl->scenario[0]) {
         return ESP_ERR_INVALID_ARG;
     }
-    interval_runtime_entry_t *entry = allocate_interval_entry();
+    interval_runtime_entry_t *entry = runtime_alloc(sizeof(*entry));
     if (!entry) {
-        ESP_LOGE(TAG, "no slot for interval runtime");
+        ESP_LOGE(TAG, "no memory for interval runtime");
         return ESP_ERR_NO_MEM;
     }
-    memset(entry, 0, sizeof(*entry));
-    entry->in_use = true;
     dm_str_copy(entry->device_id, sizeof(entry->device_id), device_id);
     dm_interval_task_runtime_init(&entry->runtime, tpl);
     esp_timer_create_args_t args = {
@@ -371,7 +369,7 @@ static esp_err_t register_interval_runtime(const dm_interval_task_template_t *tp
     esp_err_t err = esp_timer_create(&args, &entry->timer);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "interval timer create failed: %s", esp_err_to_name(err));
-        memset(entry, 0, sizeof(*entry));
+        heap_caps_free(entry);
         return err;
     }
     uint64_t interval_us = (uint64_t)entry->runtime.config.interval_ms * 1000ULL;
@@ -382,9 +380,11 @@ static esp_err_t register_interval_runtime(const dm_interval_task_template_t *tp
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "interval timer start failed: %s", esp_err_to_name(err));
         esp_timer_delete(entry->timer);
-        memset(entry, 0, sizeof(*entry));
+        heap_caps_free(entry);
         return err;
     }
+    entry->next = s_interval_entries;
+    s_interval_entries = entry;
     ESP_LOGI(TAG, "registered interval runtime for %s every %u ms",
              entry->device_id,
              (unsigned)entry->runtime.config.interval_ms);
@@ -420,11 +420,7 @@ esp_err_t dm_template_runtime_get_uid_snapshot(const char *device_id, dm_uid_run
         return ESP_ERR_INVALID_ARG;
     }
     memset(out, 0, sizeof(*out));
-    for (size_t i = 0; i < DM_UID_RUNTIME_MAX; ++i) {
-        uid_runtime_entry_t *entry = &s_uid_entries[i];
-        if (!entry->in_use) {
-            continue;
-        }
+    for (uid_runtime_entry_t *entry = s_uid_entries; entry; entry = entry->next) {
         if (strcmp(entry->device_id, device_id) != 0) {
             continue;
         }
@@ -489,11 +485,7 @@ static void apply_uid_action(const dm_uid_action_t *action)
 static bool handle_uid_message(const char *topic, const char *payload)
 {
     bool handled = false;
-    for (size_t i = 0; i < DM_UID_RUNTIME_MAX; ++i) {
-        uid_runtime_entry_t *entry = &s_uid_entries[i];
-        if (!entry->in_use) {
-            continue;
-        }
+    for (uid_runtime_entry_t *entry = s_uid_entries; entry; entry = entry->next) {
         for (size_t t = 0; t < entry->topic_count; ++t) {
             if (entry->topics[t][0] && strcmp(entry->topics[t], topic) == 0) {
                 handled = true;
@@ -579,11 +571,7 @@ static bool handle_signal_message(const char *topic)
 {
     bool handled = false;
     uint64_t now_ms = (uint64_t)(esp_timer_get_time() / 1000);
-    for (size_t i = 0; i < DM_SIGNAL_RUNTIME_MAX; ++i) {
-        signal_runtime_entry_t *entry = &s_signal_entries[i];
-        if (!entry->in_use) {
-            continue;
-        }
+    for (signal_runtime_entry_t *entry = s_signal_entries; entry; entry = entry->next) {
         if (entry->heartbeat_topic[0] && strcmp(entry->heartbeat_topic, topic) == 0) {
             handled = true;
             dm_signal_action_t action = dm_signal_runtime_handle_tick(&entry->runtime, now_ms);
@@ -600,11 +588,7 @@ static bool handle_signal_message(const char *topic)
 static bool handle_mqtt_trigger_message(const char *topic, const char *payload)
 {
     bool handled = false;
-    for (size_t i = 0; i < DM_MQTT_RUNTIME_MAX; ++i) {
-        mqtt_runtime_entry_t *entry = &s_mqtt_entries[i];
-        if (!entry->in_use) {
-            continue;
-        }
+    for (mqtt_runtime_entry_t *entry = s_mqtt_entries; entry; entry = entry->next) {
         const dm_mqtt_trigger_rule_t *rule =
             dm_mqtt_trigger_runtime_match(&entry->runtime, topic, payload);
         if (!rule) {
@@ -645,11 +629,7 @@ bool dm_template_runtime_handle_flag(const char *flag_name, bool state)
         return false;
     }
     bool handled = false;
-    for (size_t i = 0; i < DM_FLAG_RUNTIME_MAX; ++i) {
-        flag_runtime_entry_t *entry = &s_flag_entries[i];
-        if (!entry->in_use) {
-            continue;
-        }
+    for (flag_runtime_entry_t *entry = s_flag_entries; entry; entry = entry->next) {
         const dm_flag_trigger_rule_t *rule =
             dm_flag_trigger_runtime_handle(&entry->runtime, flag_name, state);
         if (!rule) {
@@ -669,11 +649,7 @@ bool dm_template_runtime_handle_flag(const char *flag_name, bool state)
                      esp_err_to_name(err));
         }
     }
-    for (size_t i = 0; i < DM_CONDITION_RUNTIME_MAX; ++i) {
-        condition_runtime_entry_t *entry = &s_condition_entries[i];
-        if (!entry->in_use) {
-            continue;
-        }
+    for (condition_runtime_entry_t *entry = s_condition_entries; entry; entry = entry->next) {
         bool changed = false;
         bool result = false;
         if (dm_condition_runtime_handle_flag(&entry->runtime, flag_name, state, &changed, &result)) {

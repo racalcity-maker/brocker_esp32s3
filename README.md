@@ -1,231 +1,164 @@
-﻿# ESP32 Smart Broker System
+# Broker Firmware
 
-Многофункциональная система на базе **ESP32-S3**, объединяющая управление устройствами, сценами, аудио, освещением и сенсорами через **MQTT**, **веб-интерфейс** и **автоматизацию**.
-
----
-
-## 🧩 Архитектура проекта
-
-Система состоит из нескольких уровней:
-
-| Уровень | Компоненты | Описание |
-|----------|-------------|----------|
-| **Core (broker)** | `main`, `config_store`, `mqtt_core`, `event_bus`, `network`, `error_monitor`, `status_led` | Основной контроллер (ESP32-S3), координирующий все устройства и эффекты |
-| **Automation layer** | `device_manager`, `automation_engine` | Управление устройствами, сценариями, условиями и флагами |
-| **UI layer** | `web_ui`, `devices_wizard.js` | Веб-интерфейс для настройки, тестирования и визуализации |
-| **Audio layer** | `audio_player` | Воспроизведение MP3/WAV/OGG (через I2S и Helix decoder) |
-| **Network layer** | Wi-Fi, MQTT, NTP, mDNS | Подключение и синхронизация времени, брокер MQTT |
-| **Hardware layer** | WS2815 LED, реле, сенсоры, DFPlayer, ультразвук | Работа с внешними устройствами через GPIO/I2C/UART |
+Firmware for the “Broker” controller that orchestrates interactive exhibits: card validators, laser/relay puzzles, audio cues, and any MQTT‑aware peripherals. The project targets ESP32‑S3 with PSRAM and an SD card used for profile storage and large JSON assets.
 
 ---
 
-## ⚙️ Основные возможности
+## 1. Architecture Overview
 
-- Управление несколькими устройствами и эффектами через MQTT.
-- Автоматизация действий по сценариям (Automation Engine).
-- Встроенный веб-интерфейс для редактирования конфигурации.
-- Поддержка воспроизведения звука (через I2S и PCM5102A).
-- Работа с адресными лентами WS2815, реле, датчиками.
-- Защита от зависаний (WDT, Error Monitor).
-- OTA-обновления (через web UI).
-- Хранение конфигурации в NVS.
+| Layer | Purpose |
+| ----- | ------- |
+| **Device Manager** (`components/device_manager`) | Holds the full configuration (profiles, devices, templates, scenarios). Primary entry point for persistence, profile cloning, and JSON import/export. |
+| **Template Runtime** (`template_runtime.c`) | Registers runtime handlers for each template, subscribes to MQTT/flag events, and triggers automation scenarios. Memory is allocated dynamically per template/device pair. |
+| **Automation Engine** (`components/automation_engine`) | Executes scenarios as queued jobs. Supports multiple worker tasks, blocking/non‑blocking audio, flag waits, and loops. |
+| **Web UI** (`components/web_ui`) | HTTP handlers + static assets for the Simple Editor and Wizard. Talks to Device Manager via `/api/devices/*`. |
+| **Supporting components** | `audio_player`, `mqtt_core`, `event_bus`, `config_store`, etc. |
 
----
+Key design choices:
 
-## 🧱 Структура проекта
-
-```
-📁 components/
-├── audio_player/        → аудиоплеер с Helix MP3 decoder
-├── automation_engine/   → обработка сценариев и автоматизации
-├── config_store/        → работа с NVS и хранение настроек
-├── device_manager/      → управление устройствами, флагами, JSON-конфигурацией
-├── error_monitor/       → контроль ошибок и индикация состояния
-├── event_bus/           → внутренняя шина событий
-├── mqtt_core/           → MQTT-клиент, интеграция с event_bus
-├── network/             → Wi-Fi, NTP, mDNS, SNTP
-├── status_led/          → системный LED-индикатор
-└── web_ui/              → встроенный HTTP-сервер и frontend
-
-📁 main/
-├── main.c               → точка входа приложения
-├── CMakeLists.txt       → регистрация компонента
-└── sdkconfig.defaults   → параметры сборки
-
-📁 data/
-└── devices_wizard.js    → JavaScript-интерфейс настройки устройств (Device Wizard)
-```
+- Only the active profile is loaded into PSRAM; other profiles live on SD (`/sdcard/.dm_profiles/<id>.bin`).
+- Large JSON operations stream from the active configuration while holding the manager lock.
+- Template runtimes are linked lists allocated in (S)PSRAM, allowing the firmware to scale with the number of configured templates rather than fixed compile‑time limits.
 
 ---
 
-## 🌐 Web UI
+## 2. Templates and Scenarios
 
-Веб-интерфейс запускается автоматически после старта системы.  
-Он предоставляет:
-- Панель статуса сети и устройств.
-- Настройку устройств, вкладок, топиков и сценариев через **Device Wizard**.
-- Просмотр логов и ручной запуск сценариев.
-- OTA-обновление прошивки и аудиофайлов (опционально).
+Each device can have at most one template, which defines the runtime wiring and default scenarios:
 
-Главная страница:  
-`http://<ip устройства>/`
+| Template | Use case | Important fields |
+| -------- | -------- | ---------------- |
+| `uid_validator` | Multiple card readers that must collectively approve a track. | Slots (source topic + allowed UIDs), success/fail MQTT topics, audio tracks, optional signal outputs. |
+| `signal_hold` | Laser or sensor that must stay active for N seconds. | Heartbeat topic, hold duration, MQTT signal payloads, audio cues. |
+| `on_mqtt_event` | Trigger scenario when a topic/payload matches. | List of rules (`topic`, `payload`, optional QoS, target scenario). |
+| `on_flag` | Trigger scenario when an automation flag changes state. | Rules referencing flag name + required boolean. |
+| `if_condition` | Evaluate multiple flags and run either the “true” or “false” scenario. | Logic mode (all/any), array of flag requirements, two scenario IDs. |
+| `interval_task` | Periodically run a scenario every `interval_ms`. | Scenario ID, interval in milliseconds. |
 
----
+Scenarios consist of sequential steps (MQTT publish, audio play/stop, set flag, wait for flags, loop, delay, event bus). Automation engine ensures only a configured number of jobs execute in parallel; long blocking steps can delay other devices.
 
-## 📡 MQTT-интеграция
-
-**MQTT-ядро (`mqtt_core`)** управляет обменом сообщений между устройствами и брокером.
-
-- Поддерживается QoS 0/1, Retain, Keepalive.
-- Темы формируются автоматически из конфигурации Device Manager.
-- Входящие MQTT-сообщения транслируются во внутренний `event_bus`.
-
-Пример топиков:
-```
-quest/altar1/activate
-quest/radio/play
-quest/door/open
-```
+For a full UI walkthrough that shows how to add each template and its scenarios step by step, open `docs/SCENARIO_SETUP.md`. `docs/TEMPLATE_GUIDE.md` complements it with deeper behavior notes and troubleshooting tips.
 
 ---
 
-## 🔄 Automation Engine
+## 3. Building & Flashing
 
-**Automation Engine** позволяет описывать сложные сценарии:
-
-- последовательности действий (воспроизвести звук → ждать → включить свет);
-- условия по флагам;
-- циклы и задержки.
-
-Типы шагов (actions):
-
-| Тип | Описание |
-|------|-----------|
-| `mqtt_publish` | Отправить MQTT-сообщение |
-| `audio_play` | Воспроизвести трек |
-| `audio_stop` | Остановить звук |
-| `set_flag` | Установить внутренний флаг |
-| `wait_flags` | Подождать, пока флаги примут значения |
-| `loop` | Повторить шаги ограниченное число раз |
-| `event` | Отправить внутреннее событие |
-| `delay` | Пауза перед следующим шагом |
-| `nop` | Пустое действие (заглушка) |
-
----
-
-## 🔊 Аудио-подсистема
-
-**Компонент:** `audio_player`
-
-- Работает через `I2S_STD_MODE`.
-- Поддерживает **MP3**, **WAV**, **OGG** (Helix decoder).
-- Воспроизводит файлы с SD-карты или из флеша.
-- Управление через API:
-  ```c
-  audio_player_play("/sdcard/intro.mp3");
-  audio_player_stop();
-  audio_player_set_volume(70);
-  ```
-
----
-
-## 💡 Индикация и диагностика
-
-**Status LED** отображает состояние системы:
-- 🔴 мигает — ошибка Wi-Fi или SD;
-- 🟢 горит — всё в порядке;
-- 🔴 постоянно — критическая ошибка.
-
-**Error Monitor** собирает флаги (`wifi_ok`, `sd_fault`) и управляет светом.
-
----
-
-## 🌐 Сетевые функции
-
-- STA + AP-режим: при отсутствии Wi-Fi создаётся точка `ESP32-Broker`.
-- Автоподключение к последней сети.
-- Автоматическая синхронизация времени (SNTP).
-- Объявление имени устройства через mDNS.
-
----
-
-## 🛠️ Сборка и прошивка
-
-Требуется:
-- ESP-IDF v5.3+
-- ESP32-S3 с PSRAM (рекомендуется 8–16 MB)
-
-### Установка зависимостей
 ```bash
-idf.py add-dependency "espressif/esp_websocket_client"
-idf.py add-dependency "espressif/esp_http_server"
-```
-
-### Сборка и прошивка
-```bash
+idf.py set-target esp32s3
+idf.py menuconfig      # configure Wi-Fi, MQTT broker, audio pins, SD card
 idf.py build
 idf.py flash monitor
 ```
 
+Requirements:
+
+- ESP-IDF **5.3 or newer** (tested with 5.3.3).
+- ESP32-S3 board with PSRAM enabled.
+- SD card connected as `/sdcard` (SPI or SDMMC) to store profiles and backups.
+- Access to an MQTT broker (configure host/port/auth in menuconfig or config store).
+
+Useful menuconfig sections:
+
+- `Broker Configuration → MQTT` for broker URL.
+- `Broker Configuration → Audio / I2S` for speaker pins.
+- `Broker Configuration → Web UI` for HTTP port and static asset options.
+
 ---
 
-## 🧮 Пример API (HTTP)
+## 4. Configuration Workflow
 
-| Метод | URL | Описание |
-|--------|------|----------|
-| `GET` | `/api/devices/config` | Получить текущую конфигурацию |
-| `POST` | `/api/devices/apply` | Применить новую конфигурацию |
-| `GET` | `/api/devices/run?device=X&scenario=Y` | Запустить сценарий вручную |
+1. **Initial flash**: After flashing, the device advertises over Wi-Fi (if configured) and hosts the Web UI at `http://<device-ip>/devices`.
+2. **Profiles**: The Simple Editor shows the list of profiles on the left. Add/clone/delete profiles as needed; every profile keeps its own device list.
+3. **Create devices**:
+   - Use **Add device** in Simple Editor or run the **Wizard** to generate a device based on templates.
+   - Assign a unique device ID. The display name is purely cosmetic.
+4. **Configure templates**:
+   - Fill in template-specific sections (slots, heartbeat topics, MQTT rules).
+   - For UID templates, `Slots` define MQTT topics from each reader; values are comma-separated UID strings.
+5. **Define scenarios**:
+   - Add topics (logical bindings) that will invoke device scenarios.
+   - Under “Scenarios” add steps; use the toolbar to add MQTT publish, audio play/stop, set flag, wait, loop, delay, or event bus actions.
+6. **Save**: Press “Save changes” to persist. Device Manager saves the active profile to SD (JSON snapshot + binary profile file) and reloads runtimes.
+7. **Test**: Use the “Run scenario” dropdown at the bottom of the page to manually trigger a scenario to ensure it executes correctly.
+
+Tips:
+
+- For long-running puzzles, prefer non-blocking audio and avoid large `delay` values—use `interval_task` or `wait_flags`.
+- Use automation flags to coordinate between multiple devices (e.g., a laser puzzle sets `laser_ok=true`, which the picture controller awaits).
+- The Web UI’s JSON preview (bottom pane) shows the raw configuration that will be saved.
 
 ---
 
-## 🗁 Конфигурация по умолчанию
+## 5. Runtime & Memory Notes
 
-Хранится в `config_store` → NVS namespace `cfg`.
+- `device_manager_lock_config()` / `device_manager_unlock_config()` must wrap any function that reads or writes the configuration (automation engine, web UI, export handlers).
+- Template runtimes now allocate per device; `dm_template_runtime_reset()` frees all lists before re-registering templates.
+- Persistence routines (`persist_locked`, `device_manager_sync_file`, export) operate directly on the locked `s_config`, avoiding full copies of `device_manager_config_t`.
+- If PSRAM is limited, reduce `DEVICE_MANAGER_MAX_DEVICES`, tab/topic limits, or audio buffer sizes in `dm_limits.h` / menuconfig.
 
-```c
-typedef struct {
-  char ssid[32];
-  char password[64];
-  char hostname[32];
-  char broker_host[64];
-  uint16_t broker_port;
-  char ntp_server[64];
-  int timezone_offset_min;
-} app_config_t;
+---
+
+## 6. API & Web UI Endpoints
+
+| Endpoint | Method | Description |
+| -------- | ------ | ----------- |
+| `/api/devices/config` | GET | Returns current configuration JSON (active profile). |
+| `/api/devices/apply` | POST | Apply new configuration (body = JSON). Optional `?profile=<id>`. |
+| `/api/devices/profile/*` | POST | `create`, `rename`, `delete`, `activate` operations. |
+| `/api/devices/run` | GET | Trigger scenario (`device` & `scenario` query parameters). |
+| `/api/devices/templates` | GET | Serve JS assets for wizard/editor. |
+
+All handlers live in `components/web_ui/web_ui_devices.c`; authentication can be implemented via HTTP middleware if required.
+
+---
+
+## 7. Logging & Debugging
+
+- Enable verbose logging for `template_runtime` and `automation` to trace scenario queues.
+- `dm_profiles` logs profile load/save errors (missing SD card, corrupt file).
+- `web_ui` logs HTTP requests and any JSON parsing failures.
+- Use `idf.py monitor` with `--timestamp` to correlate inputs (button presses) with scenario execution.
+
+Common issues:
+
+| Symptom | Possible cause |
+| ------- | --------------- |
+| Scenario executes 3–5 seconds after trigger | Automation worker busy (long audio/loop). Increase worker count or refactor scenario steps. |
+| Configuration not saving | SD card missing or write-protected; check `dm_storage` logs. |
+| UID last value not showing in UI | Template runtime not registered (template removed / device ID mismatch). Check `template_runtime` logs. |
+
+---
+
+## 8. Repository Layout
+
+```
+components/
+  automation_engine/        Scenario runtime and worker tasks.
+  audio_player/             Audio playback abstraction (I2S).
+  config_store/             Key-value storage for system settings.
+  device_manager/
+    device_manager.c        Core manager (locking, persistence).
+    device_manager_parse.c  JSON -> config.
+    device_manager_export.c Config -> JSON.
+    template_runtime.c      UID, signal, MQTT, flag, condition, interval runtimes.
+  event_bus/                Lightweight event distribution.
+  mqtt_core/                MQTT client wrapper used by templates.
+  web_ui/                   HTTP handlers and assets builder.
+main/                       Entry point, Wi-Fi init, top-level tasks.
+README.md                   (this file)
 ```
 
 ---
 
-## 🧠 Безопасность и надёжность
+## 9. Contribution Guidelines
 
-- WDT активирован на всех задачах.
-- Семафоры и критические секции защищают общие ресурсы.
-- Ошибки сети или MQTT не блокируют основной поток.
-- Возможна работа в автономном режиме (без брокера).
+1. Use clang-format for C files (style shipped in repo).
+2. Run `idf.py build` before submitting PRs.
+3. When adding templates or scenario step types, update:
+   - `dm_templates.h` / `dm_template_registry`.
+   - `template_runtime`.
+   - Web UI editors (JS) and wizard builder.
+   - README (this document) if the user-facing features change.
+4. For new devices/peripherals, extend the wizard state machine; use `components/web_ui/assets/build_devices_wizard.py`.
 
----
-
-## 🚀 Как расширить проект
-
-Добавить новое устройство:
-1. Создать компонент или MQTT-устройство.
-2. Зарегистрировать его в `device_manager`.
-3. Добавить новый тип действий в `automation_engine`.
-4. Описать вкладку в `web_ui` или `devices_wizard.js`.
-
----
-
-## 📜 Лицензия
-
-MIT License  
-Автор проекта: **Александр [2024–2025]**
-
----
-
-## 💬 Контакты
-
-- Email: <racalcity@gmail.com>
-- Telegram: @spokooha
-- GitHub: [https://github.com/racalcity-maker/brocker_esp32s3]
-
+Questions, bug reports, and feature requests are welcome via issues or pull requests.

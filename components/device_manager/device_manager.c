@@ -157,7 +157,6 @@ static void dm_lock(void)
     if (s_lock) {
         while (xSemaphoreTake(s_lock, pdMS_TO_TICKS(50)) != pdTRUE) {
             feed_wdt();
-            vTaskDelay(1);
         }
     }
 }
@@ -358,23 +357,15 @@ esp_err_t device_manager_sync_file(void)
     if (!s_config_ready) {
         return ESP_ERR_INVALID_STATE;
     }
-    uint8_t cap = s_config ? s_config->device_capacity : DEVICE_MANAGER_MAX_DEVICES;
-    device_manager_config_t *snapshot = dm_config_alloc(cap);
-    if (!snapshot) {
-        return ESP_ERR_NO_MEM;
-    }
     dm_lock();
     dm_profiles_sync_to_active(s_config);
     esp_err_t profile_err = dm_profiles_store_active(s_config);
     if (profile_err != ESP_OK) {
         dm_unlock();
-        dm_config_free(snapshot);
         return profile_err;
     }
-    dm_config_clone(snapshot, s_config);
+    esp_err_t err = dm_storage_save(CONFIG_BACKUP_PATH, s_config);
     dm_unlock();
-    esp_err_t err = dm_storage_save(CONFIG_BACKUP_PATH, snapshot);
-    dm_config_free(snapshot);
     return err;
 }
 
@@ -395,19 +386,25 @@ esp_err_t device_manager_export_profile_json(const char *profile_id, char **out_
     if (out_len) {
         *out_len = 0;
     }
+    dm_lock();
+    dm_profiles_sync_to_active(s_config);
+    bool export_active = (!profile_id || !profile_id[0] ||
+                          strcasecmp(profile_id, s_config->active_profile) == 0);
+    if (export_active) {
+        esp_err_t err = dm_storage_export_json(s_config, out_json, out_len);
+        dm_unlock();
+        return err;
+    }
     uint8_t cap = s_config ? s_config->device_capacity : DEVICE_MANAGER_MAX_DEVICES;
     device_manager_config_t *snapshot = dm_config_alloc(cap);
     if (!snapshot) {
+        dm_unlock();
         return ESP_ERR_NO_MEM;
     }
-    dm_lock();
     feed_wdt();
     dm_config_clone(snapshot, s_config);
-    feed_wdt();
     dm_unlock();
-    if (profile_id && profile_id[0]) {
-        dm_str_copy(snapshot->active_profile, sizeof(snapshot->active_profile), profile_id);
-    }
+    dm_str_copy(snapshot->active_profile, sizeof(snapshot->active_profile), profile_id);
     dm_profiles_ensure_active(snapshot);
     dm_profiles_sync_from_active(snapshot, false);
     esp_err_t err = dm_storage_export_json(snapshot, out_json, out_len);
