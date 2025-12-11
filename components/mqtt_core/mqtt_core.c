@@ -131,9 +131,25 @@ static bool ensure_session_task_storage(size_t idx)
     if (idx >= MQTT_MAX_CLIENTS) {
         return false;
     }
-    // Память должна быть выделена при инициализации
-    return s_session_stacks[idx] != NULL && s_session_tcbs[idx] != NULL;
+    if (!s_session_stacks[idx]) {
+        s_session_stacks[idx] = heap_caps_malloc(MQTT_CLIENT_STACK * sizeof(StackType_t),
+                                                 MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!s_session_stacks[idx]) {
+            return false;
+        }
+    }
+    if (!s_session_tcbs[idx]) {
+        s_session_tcbs[idx] = heap_caps_malloc(sizeof(StaticTask_t),
+                                               MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+        if (!s_session_tcbs[idx]) {
+            heap_caps_free(s_session_stacks[idx]);
+            s_session_stacks[idx] = NULL;
+            return false;
+        }
+    }
+    return true;
 }
+
 
 static uint8_t *ensure_session_tx_buffer(size_t idx)
 {
@@ -148,8 +164,23 @@ static uint8_t *ensure_session_tx_buffer(size_t idx)
 
 static bool ensure_accept_task_storage(void)
 {
-    // Память должна быть выделена при инициализации
-    return s_accept_stack != NULL && s_accept_tcb != NULL;
+    if (!s_accept_stack) {
+        s_accept_stack = heap_caps_malloc(MQTT_ACCEPT_STACK * sizeof(StackType_t),
+                                          MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!s_accept_stack) {
+            return false;
+        }
+    }
+    if (!s_accept_tcb) {
+        s_accept_tcb = heap_caps_malloc(sizeof(StaticTask_t),
+                                        MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+        if (!s_accept_tcb) {
+            heap_caps_free(s_accept_stack);
+            s_accept_stack = NULL;
+            return false;
+        }
+    }
+    return true;
 }
 
 void mqtt_core_get_client_stats(mqtt_client_stats_t *out)
@@ -990,20 +1021,6 @@ esp_err_t mqtt_core_init(void)
             // Освобождаем ранее выделенную память
             heap_caps_free(s_sessions);
             s_sessions = NULL;
-            return ESP_ERR_NO_MEM;
-        }
-    }
-    // Выделяем память для стеков и TCB клиентов один раз
-    for (size_t i = 0; i < MQTT_MAX_CLIENTS; ++i) {
-        if (!s_session_stacks[i]) {
-            s_session_stacks[i] = heap_caps_malloc(MQTT_CLIENT_STACK * sizeof(StackType_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        }
-        if (!s_session_tcbs[i]) {
-            s_session_tcbs[i] = heap_caps_malloc(sizeof(StaticTask_t), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-        }
-        if (!s_session_stacks[i] || !s_session_tcbs[i]) {
-            ESP_LOGE(TAG, "failed to allocate task storage for client %d", i);
-            // Здесь нужна полная очистка, но для простоты пока оставим так
             return ESP_ERR_NO_MEM;
         }
     }
