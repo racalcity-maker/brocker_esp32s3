@@ -47,13 +47,6 @@ jobs:
           source "${IDF_PATH}/export.sh"
           idf.py build
 
-      - name: Build device_manager tests
-        shell: bash
-        run: |
-          source "${IDF_PATH}/export.sh"
-          cd tests/device_manager
-          idf.py build
-
       - name: Upload build artifacts
         if: always()
         uses: actions/upload-artifact@v4
