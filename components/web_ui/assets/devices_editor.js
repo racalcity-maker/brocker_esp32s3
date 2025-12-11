@@ -123,6 +123,9 @@
         case 'condition-rule-remove':
           removeConditionRule(parseInt(button.dataset.index, 10));
           break;
+        case 'scenario-run':
+          runScenario(button.dataset.scenarioId || '');
+          break;
         default:
           break;
       }
@@ -327,6 +330,7 @@
     } else {
       html.push("<div class='dx-empty'>Assign template to configure behavior.</div>");
     }
+    html.push(renderScenarioSection(dev));
     html.push("<button class='danger' data-action='device-remove'>Delete device</button>");
     state.detail.innerHTML = html.join('');
   }
@@ -581,6 +585,33 @@
     html.push("<div class='dx-field'><label>Scenario ID</label><input data-field='interval' data-subfield='scenario' value='" +
       escapeHtml(tpl.scenario || '') + "' placeholder='scenario_id'></div>");
     html.push("<div class='dx-hint'>Scenario will run repeatedly with the specified interval.</div>");
+    html.push('</div>');
+    return html.join('');
+  }
+
+  function renderScenarioSection(dev) {
+    const scenarios = Array.isArray(dev.scenarios) ? dev.scenarios : [];
+    const html = [];
+    html.push("<div class='dx-section'><div class='dx-section-head'>Scenarios</div>");
+    if (!scenarios.length) {
+      html.push("<div class='dx-empty'>No scenarios defined for this device. Use the JSON editor if you need custom automation.</div>");
+    } else {
+      scenarios.forEach((sc, idx) => {
+        const name = sc.name || sc.id || ('Scenario ' + (idx + 1));
+        const steps = Array.isArray(sc.steps) ? sc.steps.length : 0;
+        const safeId = escapeHtml(sc.id || '');
+        html.push("<div class='dx-slot'>");
+        html.push("<div class='dx-slot-head'>" + escapeHtml(name) +
+          (safeId ? "<button data-action='scenario-run' data-scenario-id='" + safeId + "'>Run</button>" : '') +
+          "</div>");
+        if (safeId) {
+          html.push("<div class='dx-field dx-slot-last'><label>ID</label><div class='dx-last-value'>" + safeId + "</div></div>");
+        }
+        html.push("<div class='dx-field dx-slot-last'><label>Steps</label><div class='dx-last-value'>" + steps + "</div></div>");
+        html.push('</div>');
+      });
+      html.push("<div class='dx-hint'>Use the Run button to trigger a scenario immediately (same as API /api/devices/run).</div>");
+    }
     html.push('</div>');
     return html.join('');
   }
@@ -871,5 +902,23 @@
         }
       });
     }
+  }
+
+  function runScenario(scenarioId) {
+    const dev = state.devices[state.selectedDevice];
+    if (!dev || !scenarioId) {
+      return;
+    }
+    setStatus('Running scenario ' + scenarioId + '...', 'info');
+    const url = '/api/devices/run?device=' + encodeURIComponent(dev.id || '') +
+      '&scenario=' + encodeURIComponent(scenarioId);
+    fetch(url, {method: 'GET'})
+      .then((r) => {
+        if (!r.ok) {
+          throw new Error('HTTP ' + r.status);
+        }
+        setStatus('Scenario ' + scenarioId + ' queued', 'success');
+      })
+      .catch((err) => setStatus('Scenario run failed: ' + err.message, 'error'));
   }
 })();
