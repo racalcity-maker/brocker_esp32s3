@@ -12,7 +12,7 @@ Firmware for the “Broker” controller: an ESP32-S3 based automation hub that 
 - **Automation engine** capable of MQTT publish, audio play/stop, flag waits, loops, delays, and event bus steps. Multiple worker tasks prevent a single scenario from blocking the rest.
 - **Audio subsystem** (I2S) for track playback, pause/resume, loop, and synchronization with scenarios.
 - **Documentation** in `docs/` describing device/template setup in EN/RU, plus tests for configuration parsing.
-- **Web & MQTT authentication**: Web UI credentials live in NVS (with a hardware reset pin) and the broker accepts up to 16 MQTT user/password pairs defined in the UI.
+- **Web & MQTT authentication**: Web UI credentials live in NVS (with a hardware reset pin). The broker keeps up to 16 MQTT credential slots (client ID + username + password) and ties each slot to an ACL entry.
 
 ---
 
@@ -73,7 +73,7 @@ File `components/mqtt_core/mqtt_core.c` implements the server the peripherals co
 - Exposes stats in the Status tab (`mqtt_core_get_client_stats`).
 - Bridges events: when a client publishes a topic tied to a template runtime, `dm_template_runtime_handle_mqtt` injects it into the automation engine.
 
-> Note: authentication is currently limited to client IDs checked against ACL entries. Add username/password or tokens if the firmware will be deployed on untrusted networks.
+> ACL checks are keyed by client ID, while CONNECT authentication can also require a username/password pair per slot. For untrusted networks configure both the credentials and the ACL entry so clients must match all three fields.
 
 ---
 
@@ -239,4 +239,3 @@ tests/                    Standalone test applications (Unity-based).
   - Extended diagnostics (profiling automation queue latency).
 
 Pull requests and issues are welcome. Please run `idf.py build` and relevant tests before submitting changes. Continuous improvement of documentation and templates helps integrators understand the system faster.
-

@@ -51,6 +51,30 @@ function createDelayStep(ms) {
   };
 }
 
+function refreshRequiredIndicators() {
+  if (typeof validateRequiredFields === 'function') {
+    validateRequiredFields();
+  }
+}
+
+function refreshTrackPickers() {
+  if (!state.detail) {
+    return;
+  }
+  const inputs = state.detail.querySelectorAll('input[list="track_lookup"]');
+  inputs.forEach((input) => {
+    if (input.dataset.pickerBound) {
+      return;
+    }
+    input.dataset.pickerBound = '1';
+    input.addEventListener('focus', () => {
+      if (typeof input.showPicker === 'function') {
+        input.showPicker();
+      }
+    });
+  });
+}
+
 function updateDeviceField(field, value) {
   const dev = currentDevice();
   if (!dev) return;
@@ -61,6 +85,7 @@ function updateDeviceField(field, value) {
     dev.display_name = value;
   }
   markDirty();
+  refreshRequiredIndicators();
 }
 
 function updateTopicField(indexStr, field, value) {
@@ -233,6 +258,7 @@ function updateTemplateField(el) {
       return;
   }
   markDirty();
+  refreshRequiredIndicators();
 }
 
 function updateScenarioField(field, el) {

@@ -41,11 +41,12 @@ function renderDeviceDetail() {
         <input data-device-field="display_name" value="${escapeAttr(dev.display_name || dev.name || '')}" placeholder="Visible name">
       </div>
     </div>
-    ${renderTemplateSection(dev)}
-    ${renderTopicsSection(dev)}
-    ${renderScenariosSection(dev)}
+  ${renderTemplateSection(dev)}
+  ${renderTopicsSection(dev)}
+  ${renderScenariosSection(dev)}
   `;
   validateRequiredFields();
+  refreshTrackPickers();
 }
 
 function validateRequiredFields() {
@@ -147,13 +148,13 @@ function renderUidTemplate(dev) {
       <h5>Success actions</h5>
       <div class="dw-field"><label>MQTT topic</label><input data-template-field="uid-action" data-subfield="success_topic" value="${escapeAttr(tpl.success_topic || '')}" placeholder="quest/ok"></div>
       <div class="dw-field"><label>Payload</label><input data-template-field="uid-action" data-subfield="success_payload" value="${escapeAttr(tpl.success_payload || '')}" placeholder="payload"></div>
-      <div class="dw-field"><label>Audio track</label><input data-template-field="uid-action" data-subfield="success_audio_track" value="${escapeAttr(tpl.success_audio_track || '')}" placeholder="/sdcard/ok.mp3"></div>
+      <div class="dw-field"><label>Audio track</label><input data-template-field="uid-action" data-subfield="success_audio_track" value="${escapeAttr(tpl.success_audio_track || '')}" placeholder="/sdcard/ok.mp3" list="track_lookup"></div>
     </div>
     <div class="dw-section">
       <h5>Fail actions</h5>
       <div class="dw-field"><label>MQTT topic</label><input data-template-field="uid-action" data-subfield="fail_topic" value="${escapeAttr(tpl.fail_topic || '')}" placeholder="quest/fail"></div>
       <div class="dw-field"><label>Payload</label><input data-template-field="uid-action" data-subfield="fail_payload" value="${escapeAttr(tpl.fail_payload || '')}" placeholder="payload"></div>
-      <div class="dw-field"><label>Audio track</label><input data-template-field="uid-action" data-subfield="fail_audio_track" value="${escapeAttr(tpl.fail_audio_track || '')}" placeholder="/sdcard/fail.mp3"></div>
+      <div class="dw-field"><label>Audio track</label><input data-template-field="uid-action" data-subfield="fail_audio_track" value="${escapeAttr(tpl.fail_audio_track || '')}" placeholder="/sdcard/fail.mp3" list="track_lookup"></div>
     </div>`;
 }
 
@@ -170,9 +171,9 @@ function renderSignalTemplate(dev) {
       <div class="dw-field"><label>Reset topic</label><input data-template-field="signal" data-subfield="reset_topic" value="${escapeAttr(sig.reset_topic || '')}" placeholder="laser/reset"><div class="dw-hint small">Опубликуйте любое сообщение сюда, чтобы остановить трек и обнулить прогресс удержания.</div></div>
       <div class="dw-field required"><label>Required hold ms</label><input type="number" data-template-field="signal" data-subfield="required_hold_ms" value="${sig.required_hold_ms || 0}" data-required="true" data-required-rule="positive"><div class="dw-hint small">Минимальная длительность удержания в миллисекундах.</div></div>
       <div class="dw-field"><label>Heartbeat timeout ms</label><input type="number" data-template-field="signal" data-subfield="heartbeat_timeout_ms" value="${sig.heartbeat_timeout_ms || 0}"></div>
-      <div class="dw-field"><label>Hold track</label><input data-template-field="signal" data-subfield="hold_track" value="${escapeAttr(sig.hold_track || '')}" placeholder="/sdcard/hold.mp3"></div>
+      <div class="dw-field"><label>Hold track</label><input data-template-field="signal" data-subfield="hold_track" value="${escapeAttr(sig.hold_track || '')}" placeholder="/sdcard/hold.mp3" list="track_lookup"></div>
       <div class="dw-field"><label>Loop hold track</label><select data-template-field="signal" data-subfield="hold_track_loop"><option value="false" ${sig.hold_track_loop ? '' : 'selected'}>No</option><option value="true" ${sig.hold_track_loop ? 'selected' : ''}>Yes</option></select></div>
-      <div class="dw-field"><label>Complete track</label><input data-template-field="signal" data-subfield="complete_track" value="${escapeAttr(sig.complete_track || '')}" placeholder="/sdcard/done.mp3"></div>
+      <div class="dw-field"><label>Complete track</label><input data-template-field="signal" data-subfield="complete_track" value="${escapeAttr(sig.complete_track || '')}" placeholder="/sdcard/done.mp3" list="track_lookup"></div>
     </div>`;
 }
 
@@ -296,7 +297,7 @@ function renderSequenceTemplate(dev) {
         <div class="dw-field dw-checkbox-field"><label><input type="checkbox" data-template-field="sequence-step" data-subfield="payload_required" data-index="${idx}" ${checked}>Require exact payload</label></div>
         <div class="dw-field"><label>Hint topic</label><input data-template-field="sequence-step" data-subfield="hint_topic" data-index="${idx}" value="${escapeAttr(step.hint_topic || '')}" placeholder="hint/topic"></div>
         <div class="dw-field"><label>Hint payload</label><input data-template-field="sequence-step" data-subfield="hint_payload" data-index="${idx}" value="${escapeAttr(step.hint_payload || '')}" placeholder="payload"></div>
-        <div class="dw-field"><label>Hint audio track</label><input data-template-field="sequence-step" data-subfield="hint_audio_track" data-index="${idx}" value="${escapeAttr(step.hint_audio_track || '')}" placeholder="/sdcard/hint.mp3"></div>
+        <div class="dw-field"><label>Hint audio track</label><input data-template-field="sequence-step" data-subfield="hint_audio_track" data-index="${idx}" value="${escapeAttr(step.hint_audio_track || '')}" placeholder="/sdcard/hint.mp3" list="track_lookup"></div>
       </div>`;
   }).join('');
   return `
@@ -316,14 +317,14 @@ function renderSequenceTemplate(dev) {
       <h5>Success actions</h5>
       <div class="dw-field"><label>MQTT topic</label><input data-template-field="sequence" data-subfield="success_topic" value="${escapeAttr(tpl.success_topic || '')}" placeholder="quest/sequence/success"></div>
       <div class="dw-field"><label>Payload</label><input data-template-field="sequence" data-subfield="success_payload" value="${escapeAttr(tpl.success_payload || '')}" placeholder="payload"></div>
-      <div class="dw-field"><label>Audio track</label><input data-template-field="sequence" data-subfield="success_audio_track" value="${escapeAttr(tpl.success_audio_track || '')}" placeholder="/sdcard/success.mp3"></div>
+      <div class="dw-field"><label>Audio track</label><input data-template-field="sequence" data-subfield="success_audio_track" value="${escapeAttr(tpl.success_audio_track || '')}" placeholder="/sdcard/success.mp3" list="track_lookup"></div>
       <div class="dw-field"><label>Scenario ID</label><input data-template-field="sequence" data-subfield="success_scenario" value="${escapeAttr(tpl.success_scenario || '')}" placeholder="scenario_success"></div>
     </div>
     <div class="dw-section">
       <h5>Fail actions</h5>
       <div class="dw-field"><label>MQTT topic</label><input data-template-field="sequence" data-subfield="fail_topic" value="${escapeAttr(tpl.fail_topic || '')}" placeholder="quest/sequence/fail"></div>
       <div class="dw-field"><label>Payload</label><input data-template-field="sequence" data-subfield="fail_payload" value="${escapeAttr(tpl.fail_payload || '')}" placeholder="payload"></div>
-      <div class="dw-field"><label>Audio track</label><input data-template-field="sequence" data-subfield="fail_audio_track" value="${escapeAttr(tpl.fail_audio_track || '')}" placeholder="/sdcard/fail.mp3"></div>
+      <div class="dw-field"><label>Audio track</label><input data-template-field="sequence" data-subfield="fail_audio_track" value="${escapeAttr(tpl.fail_audio_track || '')}" placeholder="/sdcard/fail.mp3" list="track_lookup"></div>
       <div class="dw-field"><label>Scenario ID</label><input data-template-field="sequence" data-subfield="fail_scenario" value="${escapeAttr(tpl.fail_scenario || '')}" placeholder="scenario_fail"></div>
       <div class="dw-hint small">Failure actions run when timeout expires or an unexpected topic arrives.</div>
     </div>`;
@@ -444,7 +445,7 @@ function renderStepFields(step, idx) {
     case 'audio_play':
       ensure(step, ['data','audio']);
       return `
-        <div class="dw-field"><label>Track path</label><input data-step-field="data.audio.track" data-index="${idx}" value="${escapeAttr(step.data.audio.track || '')}"></div>
+        <div class="dw-field"><label>Track path</label><input data-step-field="data.audio.track" data-index="${idx}" value="${escapeAttr(step.data.audio.track || '')}" list="track_lookup"></div>
         <div class="dw-field"><label>Blocking</label><select data-step-field="data.audio.blocking" data-index="${idx}"><option value="false" ${step.data.audio.blocking?'':'selected'}>No</option><option value="true" ${step.data.audio.blocking?'selected':''}>Yes</option></select></div>`;
     case 'set_flag':
       ensure(step, ['data','flag']);
