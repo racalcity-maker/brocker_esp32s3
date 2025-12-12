@@ -62,6 +62,9 @@ function refreshTrackPickers() {
     return;
   }
   const inputs = state.detail.querySelectorAll('input[list="track_lookup"]');
+  if (inputs.length) {
+    ensureTrackLookupOptions();
+  }
   inputs.forEach((input) => {
     if (input.dataset.pickerBound) {
       return;
@@ -73,6 +76,105 @@ function refreshTrackPickers() {
       }
     });
   });
+}
+
+const TRACK_LOOKUP_ROOT = '/sdcard';
+const TRACK_LOOKUP_MAX_DIRS = 48;
+const TRACK_LOOKUP_MAX_TRACKS = 600;
+let trackLookupCache = [];
+let trackLookupPromise = null;
+
+function ensureTrackLookupOptions(forceReload) {
+  if (trackLookupPromise) {
+    return trackLookupPromise;
+  }
+  if (!forceReload && trackLookupCache.length) {
+    if (typeof updateTrackLookupOptions === 'function') {
+      updateTrackLookupOptions(trackLookupCache);
+    }
+    return Promise.resolve(trackLookupCache);
+  }
+  trackLookupPromise = collectTrackLookupEntries(TRACK_LOOKUP_ROOT).then((tracks) => {
+    trackLookupCache = tracks;
+    if (typeof updateTrackLookupOptions === 'function') {
+      updateTrackLookupOptions(trackLookupCache);
+    }
+    return trackLookupCache;
+  }).catch((err) => {
+    console.warn('Track lookup failed', err);
+    return trackLookupCache;
+  }).finally(() => {
+    trackLookupPromise = null;
+  });
+  return trackLookupPromise;
+}
+
+async function collectTrackLookupEntries(root) {
+  const queue = [root];
+  const visited = new Set();
+  const tracks = [];
+  while (queue.length && visited.size < TRACK_LOOKUP_MAX_DIRS && tracks.length < TRACK_LOOKUP_MAX_TRACKS) {
+    const dir = queue.shift();
+    if (!dir || visited.has(dir)) {
+      continue;
+    }
+    visited.add(dir);
+    const entries = await loadTrackDirectory(dir);
+    entries.forEach((entry) => {
+      if (!entry || !entry.path) {
+        return;
+      }
+      if (entry.dir) {
+        if (!visited.has(entry.path) && queue.length < TRACK_LOOKUP_MAX_DIRS) {
+          queue.push(entry.path);
+        }
+      } else if (tracks.length < TRACK_LOOKUP_MAX_TRACKS) {
+        tracks.push(entry);
+      }
+    });
+  }
+  return tracks.sort((a, b) => {
+    const dirA = trackDirName(a.path);
+    const dirB = trackDirName(b.path);
+    if (dirA !== dirB) {
+      return dirA.localeCompare(dirB);
+    }
+    return trackBaseName(a.path).localeCompare(trackBaseName(b.path));
+  });
+}
+
+async function loadTrackDirectory(path) {
+  try {
+    const res = await fetch(`/api/files?path=${encodeURIComponent(path)}`);
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status}`);
+    }
+    const data = await res.json();
+    return Array.isArray(data) ? data : [];
+  } catch (err) {
+    console.warn('Track lookup dir failed', path, err);
+    return [];
+  }
+}
+
+function trackBaseName(path) {
+  if (!path) {
+    return '';
+  }
+  const parts = path.split('/').filter(Boolean);
+  return parts.length ? parts[parts.length - 1] : path;
+}
+
+function trackDirName(path) {
+  if (!path) {
+    return '/';
+  }
+  const idx = path.lastIndexOf('/');
+  if (idx < 0) {
+    return '/';
+  }
+  const dir = path.slice(0, idx) || '/';
+  return dir || '/';
 }
 
 function updateDeviceField(field, value) {
