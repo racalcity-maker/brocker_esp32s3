@@ -46,7 +46,7 @@ Publish UID payloads to both `pictures/uid/scan*` topics via MQTT. Logs should s
 2. Fill the template section:
    - `Heartbeat topic = laser/heartbeat`
    - `Reset topic = laser/reset` *(optional — publish anything here to clear progress)*
-   - Enable **Debug logging** if you need detailed heartbeat/audio logs for troubleshooting.
+   - Use **Settings → Diagnostics → Verbose template logs** if you need detailed heartbeat/audio logs, then turn it off again.
    - `Heartbeat timeout (ms) = 1500`
    - `Required hold (ms) = 20000`
    - `Hold track = /sdcard/audio/laser_loop.mp3`, enable **Loop**.

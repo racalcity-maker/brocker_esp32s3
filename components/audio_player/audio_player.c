@@ -394,6 +394,7 @@ static void play_tone_ms(int freq_hz, int duration_ms, int volume_percent)
     int16_t *buf = heap_caps_malloc(buf_samples * AUDIO_CHANNELS * sizeof(int16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA);
     if (!buf) {
         ESP_LOGE(TAG, "no mem for audio buf");
+        error_monitor_report_audio_fault();
         return;
     }
     float phase = 0.0f;
@@ -514,6 +515,7 @@ static bool decode_wav_to_ring(FILE *f, const audio_info_t *info, int volume_per
         ESP_LOGE(TAG, "no mem for wav decode");
         if (in_buf) heap_caps_free(in_buf);
         if (out_buf) heap_caps_free(out_buf);
+        error_monitor_report_audio_fault();
         return false;
     }
     size_t bytes_read = 0;
@@ -563,7 +565,7 @@ static void reader_task(void *param)
     if (!f) {
         ESP_LOGE(TAG, "cannot open %s", cmd.path);
         status_set_message("Cannot open file");
-        error_monitor_report_sd_fault();
+        error_monitor_report_audio_fault();
         s_reader_done = true;
         vTaskDelete(NULL);
         return;
@@ -621,6 +623,7 @@ static void reader_task(void *param)
         } else {
             ESP_LOGE(TAG, "bad wav header");
             status_set_message("Bad WAV header");
+            error_monitor_report_audio_fault();
         }
     } else if (fmt == AUDIO_FMT_MP3) {
         fclose(f);
@@ -631,9 +634,11 @@ static void reader_task(void *param)
     } else if (fmt == AUDIO_FMT_OGG) {
         ESP_LOGW(TAG, "OGG decode not implemented yet");
         status_set_message("OGG not supported");
+        error_monitor_report_audio_fault();
     } else {
         ESP_LOGW(TAG, "unknown audio format");
         status_set_message("Unknown format");
+        error_monitor_report_audio_fault();
     }
 
     if (f) {
@@ -697,6 +702,7 @@ static void audio_task(void *param)
         audio_cmd_t *pcmd = malloc(sizeof(audio_cmd_t));
         if (!pcmd) {
             ESP_LOGE(TAG, "no mem for cmd");
+            error_monitor_report_audio_fault();
             continue;
         }
         *pcmd = cmd;
@@ -707,6 +713,7 @@ static void audio_task(void *param)
             free(pcmd);
             play_tone_ms(660, 150, v);
             play_tone_ms(440, 150, v);
+            error_monitor_report_audio_fault();
             continue;
         }
 

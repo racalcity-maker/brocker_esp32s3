@@ -677,6 +677,7 @@ static esp_err_t status_handler(httpd_req_t *req)
         "\"bitrate\":%d,\"path\":\"%s\",\"message\":\"%s\",\"fmt\":%d},"
         "\"web\":{\"username\":\"%s\"},"
         "\"sd\":{\"ok\":%s,\"total\":%llu,\"free\":%llu},"
+        "\"diag\":{\"verbose_logging\":%s},"
         "\"clients\":{\"total\":%u},"
         "\"uid_monitor\":%s}";
     mqtt_client_stats_t stats;
@@ -705,6 +706,7 @@ static esp_err_t status_handler(httpd_req_t *req)
                           sd_ok ? "true" : "false",
                           (unsigned long long)sd_total,
                           (unsigned long long)sd_free,
+                          cfg->verbose_logging ? "true" : "false",
                           stats.total,
                           uid_json ? uid_json : "[]");
     if (needed < 0) {
@@ -745,6 +747,7 @@ static esp_err_t status_handler(httpd_req_t *req)
              sd_ok ? "true" : "false",
              (unsigned long long)sd_total,
              (unsigned long long)sd_free,
+             cfg->verbose_logging ? "true" : "false",
              stats.total,
              uid_json ? uid_json : "[]");
     esp_err_t res = web_ui_send_ok(req, "application/json", buf);
@@ -992,6 +995,28 @@ static esp_err_t mqtt_config_handler(httpd_req_t *req)
     if (keep[0]) cfg.mqtt.keepalive_seconds = atoi(keep);
     ESP_ERROR_CHECK(config_store_set(&cfg));
     return web_ui_send_ok(req, "text/plain", "mqtt saved");
+}
+
+static esp_err_t logging_config_handler(httpd_req_t *req)
+{
+    char q[64];
+    char verbose[16] = {0};
+    if (httpd_req_get_url_query_str(req, q, sizeof(q)) != ESP_OK ||
+        httpd_query_key_value(q, "verbose", verbose, sizeof(verbose)) != ESP_OK) {
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "missing verbose");
+    }
+    bool enable = false;
+    if (strcasecmp(verbose, "1") == 0 || strcasecmp(verbose, "true") == 0 ||
+        strcasecmp(verbose, "on") == 0 || strcasecmp(verbose, "yes") == 0) {
+        enable = true;
+    }
+    app_config_t cfg = *config_store_get();
+    cfg.verbose_logging = enable;
+    esp_err_t err = config_store_set(&cfg);
+    if (err != ESP_OK) {
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "failed to save logging");
+    }
+    return web_ui_send_ok(req, "text/plain", "logging updated");
 }
 
 static esp_err_t mqtt_users_handler(httpd_req_t *req)
@@ -1359,6 +1384,7 @@ static esp_err_t start_httpd(void)
     static web_route_t route_wifi = {.fn = wifi_config_handler, .redirect_on_fail = false};
     static web_route_t route_mqtt = {.fn = mqtt_config_handler, .redirect_on_fail = false};
     static web_route_t route_mqtt_users = {.fn = mqtt_users_handler, .redirect_on_fail = false};
+    static web_route_t route_logging = {.fn = logging_config_handler, .redirect_on_fail = false};
     static web_route_t route_wifi_scan = {.fn = wifi_scan_handler, .redirect_on_fail = false};
     static web_route_t route_ap_stop = {.fn = ap_stop_handler, .redirect_on_fail = false};
     static web_route_t route_play = {.fn = audio_play_handler, .redirect_on_fail = false};
@@ -1392,6 +1418,7 @@ static esp_err_t start_httpd(void)
     ESP_RETURN_ON_ERROR(register_guarded_route("/api/config/wifi", HTTP_GET, &route_wifi), TAG, "register wifi cfg");
     ESP_RETURN_ON_ERROR(register_guarded_route("/api/config/mqtt", HTTP_GET, &route_mqtt), TAG, "register mqtt cfg");
     ESP_RETURN_ON_ERROR(register_guarded_route("/api/config/mqtt_users", HTTP_POST, &route_mqtt_users), TAG, "register mqtt users");
+    ESP_RETURN_ON_ERROR(register_guarded_route("/api/config/logging", HTTP_GET, &route_logging), TAG, "register logging cfg");
     ESP_RETURN_ON_ERROR(register_guarded_route("/api/wifi/scan", HTTP_GET, &route_wifi_scan), TAG, "register wifi scan");
     ESP_RETURN_ON_ERROR(register_guarded_route("/api/ap/stop", HTTP_GET, &route_ap_stop), TAG, "register ap stop");
     ESP_RETURN_ON_ERROR(register_guarded_route("/api/audio/play", HTTP_GET, &route_play), TAG, "register audio play");

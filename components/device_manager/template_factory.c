@@ -137,7 +137,6 @@ esp_err_t dm_template_factory_build_signal_hold(const dm_signal_hold_params_t *p
     if (params->reset_topic) {
         dm_str_copy(out->data.signal.reset_topic, sizeof(out->data.signal.reset_topic), params->reset_topic);
     }
-    out->data.signal.debug_logging = params->debug_logging;
     out->data.signal.required_hold_ms = params->required_hold_ms;
     out->data.signal.heartbeat_timeout_ms = params->heartbeat_timeout_ms;
 

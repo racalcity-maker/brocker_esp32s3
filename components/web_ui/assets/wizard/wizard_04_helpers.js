@@ -120,8 +120,6 @@ function updateTemplateField(el) {
         dev.template.signal[sub] = parseInt(el.value, 10) || 0;
       } else if (sub === 'hold_track_loop') {
         dev.template.signal[sub] = el.value === 'true';
-      } else if (sub === 'debug_logging') {
-        dev.template.signal[sub] = el.type === 'checkbox' ? el.checked : el.value === 'true';
       } else {
         dev.template.signal[sub] = el.value;
       }
@@ -397,7 +395,6 @@ function defaultSignalTemplate() {
     signal_on_ms: 0,
     heartbeat_topic: '',
     reset_topic: '',
-    debug_logging: false,
     required_hold_ms: 0,
     heartbeat_timeout_ms: 0,
     hold_track: '',
@@ -494,7 +491,6 @@ function ensureSignalTemplate(dev) {
   sig.heartbeat_timeout_ms = sig.heartbeat_timeout_ms || 0;
   sig.hold_track_loop = !!sig.hold_track_loop;
   sig.signal_on_ms = sig.signal_on_ms || 0;
-  sig.debug_logging = !!sig.debug_logging;
 }
 
 

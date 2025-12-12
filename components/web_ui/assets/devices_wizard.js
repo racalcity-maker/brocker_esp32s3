@@ -549,7 +549,6 @@ function renderSignalTemplate(dev) {
       <div class="dw-field"><label>Payload OFF</label><input data-template-field="signal" data-subfield="signal_payload_off" value="${escapeAttr(sig.signal_payload_off || '')}" placeholder="OFF"></div>
       <div class="dw-field required"><label>Heartbeat topic</label><input data-template-field="signal" data-subfield="heartbeat_topic" value="${escapeAttr(sig.heartbeat_topic || '')}" placeholder="quest/relay/hb" data-required="true"><div class="dw-hint small">Топик, куда устройство шлёт heartbeat пока луч активен.</div></div>
       <div class="dw-field"><label>Reset topic</label><input data-template-field="signal" data-subfield="reset_topic" value="${escapeAttr(sig.reset_topic || '')}" placeholder="laser/reset"><div class="dw-hint small">Опубликуйте любое сообщение сюда, чтобы остановить трек и обнулить прогресс удержания.</div></div>
-      <div class="dw-field"><label class="dw-checkbox"><input type="checkbox" data-template-field="signal" data-subfield="debug_logging" ${sig.debug_logging ? 'checked' : ''}>Включить подробные логи</label><div class="dw-hint small">Печатать события heartbeat, паузы трека и публикацию сигналов.</div></div>
       <div class="dw-field required"><label>Required hold ms</label><input type="number" data-template-field="signal" data-subfield="required_hold_ms" value="${sig.required_hold_ms || 0}" data-required="true" data-required-rule="positive"><div class="dw-hint small">Минимальная длительность удержания в миллисекундах.</div></div>
       <div class="dw-field"><label>Heartbeat timeout ms</label><input type="number" data-template-field="signal" data-subfield="heartbeat_timeout_ms" value="${sig.heartbeat_timeout_ms || 0}"></div>
       <div class="dw-field"><label>Hold track</label><input data-template-field="signal" data-subfield="hold_track" value="${escapeAttr(sig.hold_track || '')}" placeholder="/sdcard/hold.mp3"></div>
@@ -989,8 +988,6 @@ function updateTemplateField(el) {
         dev.template.signal[sub] = parseInt(el.value, 10) || 0;
       } else if (sub === 'hold_track_loop') {
         dev.template.signal[sub] = el.value === 'true';
-      } else if (sub === 'debug_logging') {
-        dev.template.signal[sub] = el.type === 'checkbox' ? el.checked : el.value === 'true';
       } else {
         dev.template.signal[sub] = el.value;
       }
@@ -1266,7 +1263,6 @@ function defaultSignalTemplate() {
     signal_on_ms: 0,
     heartbeat_topic: '',
     reset_topic: '',
-    debug_logging: false,
     required_hold_ms: 0,
     heartbeat_timeout_ms: 0,
     hold_track: '',
@@ -1363,7 +1359,6 @@ function ensureSignalTemplate(dev) {
   sig.heartbeat_timeout_ms = sig.heartbeat_timeout_ms || 0;
   sig.hold_track_loop = !!sig.hold_track_loop;
   sig.signal_on_ms = sig.signal_on_ms || 0;
-  sig.debug_logging = !!sig.debug_logging;
 }
 
 

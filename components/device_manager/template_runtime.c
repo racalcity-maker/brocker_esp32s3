@@ -19,6 +19,7 @@
 #include "automation_engine.h"
 #include "event_bus.h"
 #include "mqtt_core.h"
+#include "config_store.h"
 
 static const char *TAG = "template_runtime";
 
@@ -87,7 +88,7 @@ static sequence_runtime_entry_t *s_sequence_entries;
 static bool s_event_handler_registered = false;
 
 static const char *signal_event_str(dm_signal_event_type_t ev);
-static bool signal_debug_enabled(const signal_runtime_entry_t *entry);
+static bool diagnostics_verbose_enabled(void);
 static void handle_signal_audio(signal_runtime_entry_t *entry, dm_signal_event_type_t ev);
 static void apply_signal_mqtt_action(signal_runtime_entry_t *entry, const dm_signal_action_t *action);
 static void signal_timeout_timer_cb(void *arg);
@@ -127,9 +128,10 @@ static const char *signal_event_str(dm_signal_event_type_t ev)
     }
 }
 
-static bool signal_debug_enabled(const signal_runtime_entry_t *entry)
+static bool diagnostics_verbose_enabled(void)
 {
-    return entry && entry->runtime.config.debug_logging;
+    const app_config_t *cfg = config_store_get();
+    return cfg && cfg->verbose_logging;
 }
 
 static void template_event_handler(const event_bus_message_t *msg)
@@ -235,7 +237,7 @@ static void signal_timeout_timer_cb(void *arg)
     uint32_t timeout_ms = entry->runtime.config.heartbeat_timeout_ms
                               ? entry->runtime.config.heartbeat_timeout_ms
                               : 1000;
-    if (signal_debug_enabled(entry)) {
+    if (diagnostics_verbose_enabled()) {
         ESP_LOGW(TAG,
                  "[Signal] dev=%s heartbeat timeout>%ums event=%s acc=%ums",
                  entry->device_id,
@@ -258,7 +260,7 @@ static void reset_signal_entry(signal_runtime_entry_t *entry, const char *topic)
     entry->hold_active = false;
     stop_signal_timeout_timer(entry);
     audio_player_stop();
-    if (signal_debug_enabled(entry)) {
+    if (diagnostics_verbose_enabled()) {
         ESP_LOGI(TAG,
                  "[Signal] dev=%s reset topic=%s",
                  entry->device_id,
@@ -762,11 +764,11 @@ static void handle_signal_audio(signal_runtime_entry_t *entry, dm_signal_event_t
     case DM_SIGNAL_EVENT_START:
         if (!entry->hold_started) {
             if (audio_player_play(cfg->hold_track) == ESP_OK) {
-                if (signal_debug_enabled(entry)) {
+                if (diagnostics_verbose_enabled()) {
                     ESP_LOGI(TAG, "[Signal] dev=%s hold track play %s", entry->device_id, cfg->hold_track);
                 }
             } else {
-                if (signal_debug_enabled(entry)) {
+                if (diagnostics_verbose_enabled()) {
                     ESP_LOGW(TAG, "[Signal] dev=%s failed to play hold track %s", entry->device_id, cfg->hold_track);
                 }
             }
@@ -775,7 +777,7 @@ static void handle_signal_audio(signal_runtime_entry_t *entry, dm_signal_event_t
             entry->hold_active = true;
         } else if (entry->hold_paused) {
             audio_player_resume();
-            if (signal_debug_enabled(entry)) {
+            if (diagnostics_verbose_enabled()) {
                 ESP_LOGI(TAG, "[Signal] dev=%s hold track resume %s", entry->device_id, cfg->hold_track);
             }
             entry->hold_paused = false;
@@ -785,7 +787,7 @@ static void handle_signal_audio(signal_runtime_entry_t *entry, dm_signal_event_t
     case DM_SIGNAL_EVENT_STOP:
         if (entry->hold_active) {
             audio_player_pause();
-            if (signal_debug_enabled(entry)) {
+            if (diagnostics_verbose_enabled()) {
                 ESP_LOGI(TAG, "[Signal] dev=%s hold track pause %s", entry->device_id, cfg->hold_track);
             }
             entry->hold_paused = true;
@@ -795,7 +797,7 @@ static void handle_signal_audio(signal_runtime_entry_t *entry, dm_signal_event_t
     case DM_SIGNAL_EVENT_COMPLETED:
         if (entry->hold_active || entry->hold_paused) {
             audio_player_stop();
-            if (signal_debug_enabled(entry)) {
+            if (diagnostics_verbose_enabled()) {
                 ESP_LOGI(TAG, "[Signal] dev=%s hold track stop %s", entry->device_id, cfg->hold_track);
             }
         }
@@ -804,11 +806,11 @@ static void handle_signal_audio(signal_runtime_entry_t *entry, dm_signal_event_t
         entry->hold_active = false;
         if (cfg->complete_track[0]) {
             if (audio_player_play(cfg->complete_track) == ESP_OK) {
-                if (signal_debug_enabled(entry)) {
+                if (diagnostics_verbose_enabled()) {
                     ESP_LOGI(TAG, "[Signal] dev=%s complete track %s", entry->device_id, cfg->complete_track);
                 }
             } else {
-                if (signal_debug_enabled(entry)) {
+                if (diagnostics_verbose_enabled()) {
                     ESP_LOGW(TAG, "[Signal] dev=%s failed to play complete track %s", entry->device_id, cfg->complete_track);
                 }
             }
@@ -826,7 +828,7 @@ static void apply_signal_mqtt_action(signal_runtime_entry_t *entry, const dm_sig
     }
     if (action->signal_on) {
         publish_mqtt_payload(action->signal_topic, action->signal_payload_on);
-        if (signal_debug_enabled(entry)) {
+        if (diagnostics_verbose_enabled()) {
             ESP_LOGI(TAG, "[Signal] dev=%s publish %s payload='%s'",
                      entry ? entry->device_id : "",
                      action->signal_topic,
@@ -835,7 +837,7 @@ static void apply_signal_mqtt_action(signal_runtime_entry_t *entry, const dm_sig
     }
     if (action->signal_off) {
         publish_mqtt_payload(action->signal_topic, action->signal_payload_off);
-        if (signal_debug_enabled(entry)) {
+        if (diagnostics_verbose_enabled()) {
             ESP_LOGI(TAG, "[Signal] dev=%s publish %s payload='%s'",
                      entry ? entry->device_id : "",
                      action->signal_topic,
@@ -956,7 +958,7 @@ static bool handle_signal_message(const char *topic, const char *payload)
             } else if (action.event != DM_SIGNAL_EVENT_NONE) {
                 restart_signal_timeout_timer(entry);
             }
-            if (signal_debug_enabled(entry)) {
+            if (diagnostics_verbose_enabled()) {
                 ESP_LOGI(TAG,
                          "[Signal] dev=%s heartbeat topic=%s payload='%s' event=%s acc=%ums",
                          entry->device_id,

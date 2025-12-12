@@ -79,3 +79,8 @@ void error_monitor_report_sd_fault(void)
     update_led_locked();
     xSemaphoreGive(s_lock);
 }
+
+void error_monitor_report_audio_fault(void)
+{
+    status_led_flash_warning(3);
+}

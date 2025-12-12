@@ -84,6 +84,7 @@ static void load_defaults(app_config_t *cfg)
     strncpy(cfg->time.ntp_server, "pool.ntp.org", sizeof(cfg->time.ntp_server) - 1);
     cfg->time.timezone_offset_min = 180;
     apply_default_web_auth(&cfg->web);
+    cfg->verbose_logging = false;
 }
 
 static bool validate_string(const char *s, size_t max_len)

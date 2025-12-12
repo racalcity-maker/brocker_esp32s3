@@ -46,7 +46,6 @@ typedef struct {
 
     const char *heartbeat_topic;
     const char *reset_topic;
-    bool debug_logging;
     uint32_t required_hold_ms;
     uint32_t heartbeat_timeout_ms;
 

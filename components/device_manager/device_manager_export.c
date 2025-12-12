@@ -182,7 +182,6 @@ static cJSON *signal_template_to_json(const dm_signal_hold_template_t *tpl)
     cJSON_AddNumberToObject(root, "signal_on_ms", (double)tpl->signal_on_ms);
     template_to_json_string(root, "heartbeat_topic", tpl->heartbeat_topic);
     template_to_json_string(root, "reset_topic", tpl->reset_topic);
-    cJSON_AddBoolToObject(root, "debug_logging", tpl->debug_logging);
     cJSON_AddNumberToObject(root, "required_hold_ms", (double)tpl->required_hold_ms);
     cJSON_AddNumberToObject(root, "heartbeat_timeout_ms", (double)tpl->heartbeat_timeout_ms);
     template_to_json_string(root, "hold_track", tpl->hold_track);

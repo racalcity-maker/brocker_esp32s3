@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdint.h>
+#include <stdbool.h>
 
 #include "esp_err.h"
 
@@ -45,6 +46,7 @@ typedef struct {
     app_mqtt_config_t mqtt;
     app_time_config_t time;
     app_web_auth_t web;
+    bool verbose_logging;
 } app_config_t;
 
 esp_err_t config_store_init(void);

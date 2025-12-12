@@ -87,7 +87,6 @@ typedef struct {
 
     char heartbeat_topic[DEVICE_MANAGER_TOPIC_MAX_LEN];
     char reset_topic[DEVICE_MANAGER_TOPIC_MAX_LEN];
-    bool debug_logging;
     uint32_t required_hold_ms;
     uint32_t heartbeat_timeout_ms;
 

@@ -11,3 +11,4 @@ typedef enum {
 
 esp_err_t status_led_init(void);
 void status_led_set_pattern(status_led_pattern_t pattern);
+void status_led_flash_warning(uint8_t flashes);
