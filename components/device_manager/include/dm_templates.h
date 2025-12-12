@@ -86,6 +86,8 @@ typedef struct {
     uint32_t signal_on_ms;
 
     char heartbeat_topic[DEVICE_MANAGER_TOPIC_MAX_LEN];
+    char reset_topic[DEVICE_MANAGER_TOPIC_MAX_LEN];
+    bool debug_logging;
     uint32_t required_hold_ms;
     uint32_t heartbeat_timeout_ms;
 
@@ -120,6 +122,8 @@ void dm_signal_state_reset(dm_signal_state_t *state);
 dm_signal_event_t dm_signal_handle_tick(dm_signal_state_t *state,
                                         const dm_signal_hold_template_t *tpl,
                                         uint64_t now_ms);
+dm_signal_event_t dm_signal_handle_timeout(dm_signal_state_t *state,
+                                           const dm_signal_hold_template_t *tpl);
 
 // MQTT trigger template ---------------------------------------------------------
 

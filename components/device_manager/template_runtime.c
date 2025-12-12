@@ -38,9 +38,11 @@ typedef struct signal_runtime_entry {
     char device_id[DEVICE_MANAGER_ID_MAX_LEN];
     dm_signal_runtime_t runtime;
     char heartbeat_topic[DEVICE_MANAGER_TOPIC_MAX_LEN];
+    char reset_topic[DEVICE_MANAGER_TOPIC_MAX_LEN];
     bool hold_started;
     bool hold_paused;
     bool hold_active;
+    esp_timer_handle_t timeout_timer;
     struct signal_runtime_entry *next;
 } signal_runtime_entry_t;
 
@@ -84,6 +86,15 @@ static interval_runtime_entry_t *s_interval_entries;
 static sequence_runtime_entry_t *s_sequence_entries;
 static bool s_event_handler_registered = false;
 
+static const char *signal_event_str(dm_signal_event_type_t ev);
+static bool signal_debug_enabled(const signal_runtime_entry_t *entry);
+static void handle_signal_audio(signal_runtime_entry_t *entry, dm_signal_event_type_t ev);
+static void apply_signal_mqtt_action(signal_runtime_entry_t *entry, const dm_signal_action_t *action);
+static void signal_timeout_timer_cb(void *arg);
+static void restart_signal_timeout_timer(signal_runtime_entry_t *entry);
+static void stop_signal_timeout_timer(signal_runtime_entry_t *entry);
+static void reset_signal_entry(signal_runtime_entry_t *entry, const char *topic);
+
 static bool payload_to_bool(const char *payload)
 {
     if (!payload) {
@@ -97,6 +108,28 @@ static bool payload_to_bool(const char *payload)
         return true;
     }
     return false;
+}
+
+static const char *signal_event_str(dm_signal_event_type_t ev)
+{
+    switch (ev) {
+    case DM_SIGNAL_EVENT_START:
+        return "start";
+    case DM_SIGNAL_EVENT_CONTINUE:
+        return "continue";
+    case DM_SIGNAL_EVENT_STOP:
+        return "stop";
+    case DM_SIGNAL_EVENT_COMPLETED:
+        return "completed";
+    case DM_SIGNAL_EVENT_NONE:
+    default:
+        return "none";
+    }
+}
+
+static bool signal_debug_enabled(const signal_runtime_entry_t *entry)
+{
+    return entry && entry->runtime.config.debug_logging;
 }
 
 static void template_event_handler(const event_bus_message_t *msg)
@@ -147,10 +180,90 @@ static void free_signal_entries(void)
     signal_runtime_entry_t *entry = s_signal_entries;
     while (entry) {
         signal_runtime_entry_t *next = entry->next;
+        if (entry->timeout_timer) {
+            esp_timer_stop(entry->timeout_timer);
+            esp_timer_delete(entry->timeout_timer);
+        }
         heap_caps_free(entry);
         entry = next;
     }
     s_signal_entries = NULL;
+}
+
+static uint64_t signal_timeout_interval_us(const signal_runtime_entry_t *entry)
+{
+    if (!entry) {
+        return 0;
+    }
+    uint32_t timeout_ms = entry->runtime.config.heartbeat_timeout_ms
+                              ? entry->runtime.config.heartbeat_timeout_ms
+                              : 1000;
+    return (uint64_t)timeout_ms * 1000ULL;
+}
+
+static void restart_signal_timeout_timer(signal_runtime_entry_t *entry)
+{
+    if (!entry || !entry->timeout_timer) {
+        return;
+    }
+    uint64_t timeout_us = signal_timeout_interval_us(entry);
+    if (timeout_us == 0) {
+        return;
+    }
+    esp_timer_stop(entry->timeout_timer);
+    esp_timer_start_once(entry->timeout_timer, timeout_us);
+}
+
+static void stop_signal_timeout_timer(signal_runtime_entry_t *entry)
+{
+    if (!entry || !entry->timeout_timer) {
+        return;
+    }
+    esp_timer_stop(entry->timeout_timer);
+}
+
+static void signal_timeout_timer_cb(void *arg)
+{
+    signal_runtime_entry_t *entry = (signal_runtime_entry_t *)arg;
+    if (!entry) {
+        return;
+    }
+    dm_signal_action_t action = dm_signal_runtime_handle_timeout(&entry->runtime);
+    if (action.event != DM_SIGNAL_EVENT_STOP) {
+        return;
+    }
+    uint32_t timeout_ms = entry->runtime.config.heartbeat_timeout_ms
+                              ? entry->runtime.config.heartbeat_timeout_ms
+                              : 1000;
+    if (signal_debug_enabled(entry)) {
+        ESP_LOGW(TAG,
+                 "[Signal] dev=%s heartbeat timeout>%ums event=%s acc=%ums",
+                 entry->device_id,
+                 (unsigned)timeout_ms,
+                 signal_event_str(action.event),
+                 (unsigned)action.accumulated_ms);
+    }
+    handle_signal_audio(entry, action.event);
+    apply_signal_mqtt_action(entry, &action);
+}
+
+static void reset_signal_entry(signal_runtime_entry_t *entry, const char *topic)
+{
+    if (!entry) {
+        return;
+    }
+    dm_signal_state_reset(&entry->runtime.state);
+    entry->hold_started = false;
+    entry->hold_paused = false;
+    entry->hold_active = false;
+    stop_signal_timeout_timer(entry);
+    audio_player_stop();
+    if (signal_debug_enabled(entry)) {
+        ESP_LOGI(TAG,
+                 "[Signal] dev=%s reset topic=%s",
+                 entry->device_id,
+                 topic ? topic : "");
+    }
 }
 
 static void free_mqtt_entries(void)
@@ -292,9 +405,24 @@ static esp_err_t register_signal_runtime(const dm_signal_hold_template_t *tpl, c
     dm_str_copy(entry->device_id, sizeof(entry->device_id), device_id);
     dm_signal_runtime_init(&entry->runtime, tpl);
     dm_str_copy(entry->heartbeat_topic, sizeof(entry->heartbeat_topic), tpl->heartbeat_topic);
+    dm_str_copy(entry->reset_topic, sizeof(entry->reset_topic), tpl->reset_topic);
     entry->hold_started = false;
     entry->hold_paused = false;
     entry->hold_active = false;
+    entry->timeout_timer = NULL;
+    esp_timer_create_args_t args = {
+        .callback = signal_timeout_timer_cb,
+        .arg = entry,
+        .name = "dm_signal_timeout",
+        .dispatch_method = ESP_TIMER_TASK,
+    };
+    esp_err_t timer_err = esp_timer_create(&args, &entry->timeout_timer);
+    if (timer_err != ESP_OK) {
+        entry->timeout_timer = NULL;
+        ESP_LOGW(TAG, "signal timeout timer create failed for %s: %s",
+                 entry->device_id,
+                 esp_err_to_name(timer_err));
+    }
     entry->next = s_signal_entries;
     s_signal_entries = entry;
     ESP_LOGI(TAG, "registered signal runtime for device %s topic %s", entry->device_id, entry->heartbeat_topic);
@@ -633,12 +761,23 @@ static void handle_signal_audio(signal_runtime_entry_t *entry, dm_signal_event_t
     switch (ev) {
     case DM_SIGNAL_EVENT_START:
         if (!entry->hold_started) {
-            audio_player_play(cfg->hold_track);
+            if (audio_player_play(cfg->hold_track) == ESP_OK) {
+                if (signal_debug_enabled(entry)) {
+                    ESP_LOGI(TAG, "[Signal] dev=%s hold track play %s", entry->device_id, cfg->hold_track);
+                }
+            } else {
+                if (signal_debug_enabled(entry)) {
+                    ESP_LOGW(TAG, "[Signal] dev=%s failed to play hold track %s", entry->device_id, cfg->hold_track);
+                }
+            }
             entry->hold_started = true;
             entry->hold_paused = false;
             entry->hold_active = true;
         } else if (entry->hold_paused) {
             audio_player_resume();
+            if (signal_debug_enabled(entry)) {
+                ESP_LOGI(TAG, "[Signal] dev=%s hold track resume %s", entry->device_id, cfg->hold_track);
+            }
             entry->hold_paused = false;
             entry->hold_active = true;
         }
@@ -646,6 +785,9 @@ static void handle_signal_audio(signal_runtime_entry_t *entry, dm_signal_event_t
     case DM_SIGNAL_EVENT_STOP:
         if (entry->hold_active) {
             audio_player_pause();
+            if (signal_debug_enabled(entry)) {
+                ESP_LOGI(TAG, "[Signal] dev=%s hold track pause %s", entry->device_id, cfg->hold_track);
+            }
             entry->hold_paused = true;
             entry->hold_active = false;
         }
@@ -653,12 +795,23 @@ static void handle_signal_audio(signal_runtime_entry_t *entry, dm_signal_event_t
     case DM_SIGNAL_EVENT_COMPLETED:
         if (entry->hold_active || entry->hold_paused) {
             audio_player_stop();
+            if (signal_debug_enabled(entry)) {
+                ESP_LOGI(TAG, "[Signal] dev=%s hold track stop %s", entry->device_id, cfg->hold_track);
+            }
         }
         entry->hold_started = false;
         entry->hold_paused = false;
         entry->hold_active = false;
         if (cfg->complete_track[0]) {
-            audio_player_play(cfg->complete_track);
+            if (audio_player_play(cfg->complete_track) == ESP_OK) {
+                if (signal_debug_enabled(entry)) {
+                    ESP_LOGI(TAG, "[Signal] dev=%s complete track %s", entry->device_id, cfg->complete_track);
+                }
+            } else {
+                if (signal_debug_enabled(entry)) {
+                    ESP_LOGW(TAG, "[Signal] dev=%s failed to play complete track %s", entry->device_id, cfg->complete_track);
+                }
+            }
         }
         break;
     default:
@@ -666,16 +819,28 @@ static void handle_signal_audio(signal_runtime_entry_t *entry, dm_signal_event_t
     }
 }
 
-static void apply_signal_mqtt_action(const dm_signal_action_t *action)
+static void apply_signal_mqtt_action(signal_runtime_entry_t *entry, const dm_signal_action_t *action)
 {
     if (!action) {
         return;
     }
     if (action->signal_on) {
         publish_mqtt_payload(action->signal_topic, action->signal_payload_on);
+        if (signal_debug_enabled(entry)) {
+            ESP_LOGI(TAG, "[Signal] dev=%s publish %s payload='%s'",
+                     entry ? entry->device_id : "",
+                     action->signal_topic,
+                     action->signal_payload_on ? action->signal_payload_on : "");
+        }
     }
     if (action->signal_off) {
         publish_mqtt_payload(action->signal_topic, action->signal_payload_off);
+        if (signal_debug_enabled(entry)) {
+            ESP_LOGI(TAG, "[Signal] dev=%s publish %s payload='%s'",
+                     entry ? entry->device_id : "",
+                     action->signal_topic,
+                     action->signal_payload_off ? action->signal_payload_off : "");
+        }
     }
 }
 
@@ -773,16 +938,35 @@ static bool handle_sequence_message(const char *topic, const char *payload)
     return handled;
 }
 
-static bool handle_signal_message(const char *topic)
+static bool handle_signal_message(const char *topic, const char *payload)
 {
     bool handled = false;
     uint64_t now_ms = (uint64_t)(esp_timer_get_time() / 1000);
     for (signal_runtime_entry_t *entry = s_signal_entries; entry; entry = entry->next) {
+        if (entry->reset_topic[0] && strcmp(entry->reset_topic, topic) == 0) {
+            handled = true;
+            reset_signal_entry(entry, topic);
+            continue;
+        }
         if (entry->heartbeat_topic[0] && strcmp(entry->heartbeat_topic, topic) == 0) {
             handled = true;
             dm_signal_action_t action = dm_signal_runtime_handle_tick(&entry->runtime, now_ms);
+            if (action.event == DM_SIGNAL_EVENT_COMPLETED || action.event == DM_SIGNAL_EVENT_STOP) {
+                stop_signal_timeout_timer(entry);
+            } else if (action.event != DM_SIGNAL_EVENT_NONE) {
+                restart_signal_timeout_timer(entry);
+            }
+            if (signal_debug_enabled(entry)) {
+                ESP_LOGI(TAG,
+                         "[Signal] dev=%s heartbeat topic=%s payload='%s' event=%s acc=%ums",
+                         entry->device_id,
+                         topic,
+                         payload ? payload : "",
+                         signal_event_str(action.event),
+                         (unsigned)action.accumulated_ms);
+            }
             handle_signal_audio(entry, action.event);
-            apply_signal_mqtt_action(&action);
+            apply_signal_mqtt_action(entry, &action);
             if (action.event == DM_SIGNAL_EVENT_COMPLETED) {
                 trigger_uid_scenario(entry->device_id, "signal_complete");
             }
@@ -828,7 +1012,7 @@ bool dm_template_runtime_handle_mqtt(const char *topic, const char *payload)
     }
     bool handled = false;
     handled |= handle_uid_message(topic, payload);
-    handled |= handle_signal_message(topic);
+    handled |= handle_signal_message(topic, payload);
     handled |= handle_mqtt_trigger_message(topic, payload);
     handled |= handle_sequence_message(topic, payload);
     return handled;

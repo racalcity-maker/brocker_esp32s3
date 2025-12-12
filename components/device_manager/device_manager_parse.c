@@ -172,6 +172,14 @@ static bool signal_template_from_json(dm_signal_hold_template_t *tpl, const cJSO
     if (cJSON_IsString(heartbeat) && heartbeat->valuestring) {
         dm_str_copy(tpl->heartbeat_topic, sizeof(tpl->heartbeat_topic), heartbeat->valuestring);
     }
+    const cJSON *reset = cJSON_GetObjectItem(obj, "reset_topic");
+    if (cJSON_IsString(reset) && reset->valuestring) {
+        dm_str_copy(tpl->reset_topic, sizeof(tpl->reset_topic), reset->valuestring);
+    }
+    const cJSON *debug = cJSON_GetObjectItem(obj, "debug_logging");
+    if (cJSON_IsBool(debug)) {
+        tpl->debug_logging = cJSON_IsTrue(debug);
+    }
     tpl->required_hold_ms = json_number_to_u32(cJSON_GetObjectItem(obj, "required_hold_ms"), tpl->required_hold_ms);
     tpl->heartbeat_timeout_ms = json_number_to_u32(cJSON_GetObjectItem(obj, "heartbeat_timeout_ms"), tpl->heartbeat_timeout_ms);
     const cJSON *hold_track = cJSON_GetObjectItem(obj, "hold_track");

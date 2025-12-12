@@ -45,6 +45,8 @@ Publish UID payloads to both `pictures/uid/scan*` topics via MQTT. Logs should s
 1. Add device `laser_guard`, choose template **Signal Hold**.
 2. Fill the template section:
    - `Heartbeat topic = laser/heartbeat`
+   - `Reset topic = laser/reset` *(optional — publish anything here to clear progress)*
+   - Enable **Debug logging** if you need detailed heartbeat/audio logs for troubleshooting.
    - `Heartbeat timeout (ms) = 1500`
    - `Required hold (ms) = 20000`
    - `Hold track = /sdcard/audio/laser_loop.mp3`, enable **Loop**.
@@ -59,7 +61,7 @@ The template creates `signal_complete`. Edit it to:
 4. Step 4: `mqtt_publish` (`laser/relay/cmd`, payload `OFF`).
 
 ### Test
-Send MQTT heartbeats (`laser/heartbeat` + payload `hb`) every second. Watch logs for `[Signal] hold=XXms`. When `20000` ms reached, `signal_complete` fires. Remove the beam (stop heartbeat) and confirm the loop pauses immediately.
+Send MQTT heartbeats (`laser/heartbeat` + payload `hb`) every second. Watch logs for `[Signal] hold=XXms`. When `20000` ms reached, `signal_complete` fires. Remove the beam (stop heartbeat) and confirm the loop pauses immediately. Publish to `laser/reset` to fully reset the timer/audio.
 
 ---
 

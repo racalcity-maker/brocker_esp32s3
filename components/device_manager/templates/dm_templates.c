@@ -187,24 +187,42 @@ dm_signal_event_t dm_signal_handle_tick(dm_signal_state_t *state,
     uint64_t delta = 0;
     if (now_ms > state->last_tick_ms) {
         delta = now_ms - state->last_tick_ms;
-        state->accumulated_ms += (uint32_t)delta;
     }
     state->last_tick_ms = now_ms;
-    event.accumulated_ms = state->accumulated_ms;
-
-    if (state->accumulated_ms >= tpl->required_hold_ms) {
-        state->finished = true;
-        event.type = DM_SIGNAL_EVENT_COMPLETED;
-        return event;
-    }
-
-    if (delta > timeout) {
+    if (timeout > 0 && delta > timeout) {
         state->active = false;
         event.type = DM_SIGNAL_EVENT_STOP;
         return event;
     }
-
+    if (delta > 0) {
+        state->accumulated_ms += (uint32_t)delta;
+        event.accumulated_ms = state->accumulated_ms;
+    }
+    if (state->accumulated_ms >= tpl->required_hold_ms) {
+        state->finished = true;
+        state->active = false;
+        event.type = DM_SIGNAL_EVENT_COMPLETED;
+        return event;
+    }
     event.type = DM_SIGNAL_EVENT_CONTINUE;
+    return event;
+}
+
+dm_signal_event_t dm_signal_handle_timeout(dm_signal_state_t *state,
+                                           const dm_signal_hold_template_t *tpl)
+{
+    dm_signal_event_t event = {
+        .type = DM_SIGNAL_EVENT_NONE,
+        .accumulated_ms = state ? state->accumulated_ms : 0,
+    };
+    if (!state || !tpl || tpl->required_hold_ms == 0) {
+        return event;
+    }
+    if (!state->active || state->finished) {
+        return event;
+    }
+    state->active = false;
+    event.type = DM_SIGNAL_EVENT_STOP;
     return event;
 }
 

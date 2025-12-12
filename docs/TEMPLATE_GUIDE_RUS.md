@@ -41,6 +41,8 @@
    - `signal_topic = laser/relay/cmd`
    - `signal_payload_on = ON`, `signal_payload_off = OFF`
    - `heartbeat_topic = laser/heartbeat`
+   - `reset_topic = laser/reset` (???????????: ????????? ???? ????????? ????????????? ????????? ? ???????? ????????).
+   - `debug_logging = true` (optional: verbose heartbeat/audio logs for troubleshooting).
    - `required_hold_ms = 20000`
    - `heartbeat_timeout_ms = 1500`
    - `hold_track = /sdcard/audio/hold_loop.mp3`, `hold_track_loop = true`
@@ -153,13 +155,17 @@
    - ѕри желании добавьте подсказки: hint_topic = hints/led, hint_payload = 1, hint_audio_track = /sdcard/audio/hint1.mp3, чтобы игроки сразу видели правильный ход.
 3. **ѕараметры рантайма**
    - 	imeout_ms = 8000 Ч если следующий шаг не приходит в течение 8 секунд, прогресс сбрасываетс€.
-   - eset_on_error = true Ч люба€ лишн€€ тема мгновенно возвращает последовательность к шагу 1.
+   - 
+eset_on_error = true Ч люба€ лишн€€ тема мгновенно возвращает последовательность к шагу 1.
 4. **ƒействи€**
    - Success: success_topic = puzzle/result, success_payload = unlocked, success_audio_track = /sdcard/audio/success.mp3, success_scenario = unlock_sequence.
    - Fail: ail_topic = puzzle/result, ail_payload = error, ail_audio_track = /sdcard/audio/fail.mp3, ail_scenario = reset_sequence.
 5. **—ценарии**
-   - unlock_sequence: шаг 1 Ч MQTT elay/cmd с open; шаг 2 Ч воспроизвести /sdcard/audio/unlocked.mp3.
-   - eset_sequence: шаг 1 Ч MQTT elay/cmd с lock; шаг 2 Ч set_flag sequence_ready=true.
+   - unlock_sequence: шаг 1 Ч MQTT 
+elay/cmd с open; шаг 2 Ч воспроизвести /sdcard/audio/unlocked.mp3.
+   - 
+eset_sequence: шаг 1 Ч MQTT 
+elay/cmd с lock; шаг 2 Ч set_flag sequence_ready=true.
 6. **ѕроверка**
    - ќтправьте 	ouch последовательно на plate/1Еplate/6: в логе по€в€тс€ строки [Sequence] step_ok Е, запуститс€ success-сценарий.
    - ќтправьте сообщение не в том пор€дке: лог покажет event=fail, запуститс€ fail-сценарий, следующа€ попытка снова начнЄтс€ с шага 1.

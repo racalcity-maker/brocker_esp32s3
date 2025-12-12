@@ -37,6 +37,8 @@ This guide walks through concrete examples for every built‑in template. Each s
    - `signal_topic = laser/relay/cmd`
    - `signal_payload_on = ON`, `signal_payload_off = OFF`
    - `heartbeat_topic = laser/heartbeat`
+   - `reset_topic = laser/reset` *(optional — publish anything here to abort and restart)*
+   - `debug_logging = true` *(optional — enable verbose heartbeat/audio logs while troubleshooting)*
    - `required_hold_ms = 20000`
    - `heartbeat_timeout_ms = 1500`
    - `hold_track = /sdcard/audio/hold_loop.mp3`, `hold_track_loop = true`
@@ -44,10 +46,11 @@ This guide walks through concrete examples for every built‑in template. Each s
 3. **Scenario** (auto-generated)
    - `signal_complete`: publish ON, play complete track, delay by `signal_on_ms` if set, then publish OFF.
 4. **Heartbeat flow**
-   - Every MQTT message on `laser/heartbeat` marks progress; if >1.5s without heartbeat, runtime pauses audio and resets accumulation.
+   - Every MQTT message on `laser/heartbeat` marks progress; if >1.5s without heartbeat, runtime pauses audio and freezes the timer at the current value.
+   - Publishing to `laser/reset` (or your reset topic) instantly stops the hold track, clears accumulated time, and lets you start over.
 5. **Verification**
    - Publish heartbeat once per second for 20s → scenario triggers.
-   - Drop heartbeat (>1.5s) → audio pauses, progress resets.
+   - Drop heartbeat (>1.5s) → audio pauses, progress stays at the last value until heartbeats return.
 
 ---
 

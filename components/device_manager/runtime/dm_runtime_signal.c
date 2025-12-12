@@ -16,11 +16,9 @@ static void fill_signal_payloads(const dm_signal_hold_template_t *tpl,
     }
     dm_str_copy(action->signal_topic, sizeof(action->signal_topic), tpl->signal_topic);
     if (success) {
-        if (tpl->signal_payload_on[0]) {
-            action->signal_on = true;
-            dm_str_copy(action->signal_payload_on, sizeof(action->signal_payload_on), tpl->signal_payload_on);
-            action->signal_on_ms = tpl->signal_on_ms;
-        }
+        action->signal_on = true;
+        dm_str_copy(action->signal_payload_on, sizeof(action->signal_payload_on), tpl->signal_payload_on);
+        action->signal_on_ms = tpl->signal_on_ms;
         if (tpl->signal_payload_off[0]) {
             action->signal_off = true;
             dm_str_copy(action->signal_payload_off, sizeof(action->signal_payload_off), tpl->signal_payload_off);
@@ -63,6 +61,7 @@ dm_signal_action_t dm_signal_runtime_handle_tick(dm_signal_runtime_t *rt, uint64
     }
     dm_signal_event_t ev = dm_signal_handle_tick(&rt->state, &rt->config, now_ms);
     action.event = ev.type;
+    action.accumulated_ms = ev.accumulated_ms;
 
     switch (ev.type) {
     case DM_SIGNAL_EVENT_START:
@@ -85,5 +84,20 @@ dm_signal_action_t dm_signal_runtime_handle_tick(dm_signal_runtime_t *rt, uint64
         break;
     }
 
+    return action;
+}
+
+dm_signal_action_t dm_signal_runtime_handle_timeout(dm_signal_runtime_t *rt)
+{
+    dm_signal_action_t action = {0};
+    if (!rt) {
+        return action;
+    }
+    dm_signal_event_t ev = dm_signal_handle_timeout(&rt->state, &rt->config);
+    action.event = ev.type;
+    action.accumulated_ms = ev.accumulated_ms;
+    if (ev.type == DM_SIGNAL_EVENT_STOP) {
+        action.audio_pause = true;
+    }
     return action;
 }

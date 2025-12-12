@@ -45,6 +45,8 @@
 1. Добавьте `laser_guard`, выберите **Signal Hold**.
 2. Заполните:
    - `Heartbeat topic = laser/heartbeat`
+   - `Reset topic = laser/reset` (???????????: ?????????? ???? ?????????? ????????).
+   - Debug logging = on (optional: verbose heartbeat/audio logs for troubleshooting).
    - `Heartbeat timeout (ms) = 1500`
    - `Required hold (ms) = 20000`
    - `Hold track = /sdcard/audio/laser_loop.mp3`, включите **Loop**.

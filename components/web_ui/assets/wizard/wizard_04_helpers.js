@@ -120,6 +120,8 @@ function updateTemplateField(el) {
         dev.template.signal[sub] = parseInt(el.value, 10) || 0;
       } else if (sub === 'hold_track_loop') {
         dev.template.signal[sub] = el.value === 'true';
+      } else if (sub === 'debug_logging') {
+        dev.template.signal[sub] = el.type === 'checkbox' ? el.checked : el.value === 'true';
       } else {
         dev.template.signal[sub] = el.value;
       }
@@ -394,6 +396,8 @@ function defaultSignalTemplate() {
     signal_payload_off: '',
     signal_on_ms: 0,
     heartbeat_topic: '',
+    reset_topic: '',
+    debug_logging: false,
     required_hold_ms: 0,
     heartbeat_timeout_ms: 0,
     hold_track: '',
@@ -483,64 +487,17 @@ function ensureSignalTemplate(dev) {
     dev.template.signal = defaultSignalTemplate();
   }
   const sig = dev.template.signal;
-  ['signal_topic','signal_payload_on','signal_payload_off','heartbeat_topic','hold_track','complete_track'].forEach((key) => {
+  ['signal_topic','signal_payload_on','signal_payload_off','heartbeat_topic','reset_topic','hold_track','complete_track'].forEach((key) => {
     sig[key] = sig[key] || '';
   });
   sig.required_hold_ms = sig.required_hold_ms || 0;
   sig.heartbeat_timeout_ms = sig.heartbeat_timeout_ms || 0;
   sig.hold_track_loop = !!sig.hold_track_loop;
   sig.signal_on_ms = sig.signal_on_ms || 0;
-  ensureSignalScenario(dev, sig);
+  sig.debug_logging = !!sig.debug_logging;
 }
 
-function ensureSignalScenario(dev, sig) {
-  if (!dev) {
-    return;
-  }
-  if (!Array.isArray(dev.scenarios)) {
-    dev.scenarios = [];
-  }
-  const matchId = (sc) => sc && typeof sc.id === 'string' && sc.id.toLowerCase() === 'signal_complete';
-  let scenario = dev.scenarios.find(matchId);
-  if (!scenario) {
-    scenario = {
-      id: 'signal_complete',
-      name: 'Signal hold complete',
-      button_enabled: false,
-      button_label: '',
-      steps: [],
-    };
-    dev.scenarios.push(scenario);
-  } else {
-    scenario.id = scenario.id || 'signal_complete';
-    if (!scenario.name) {
-      scenario.name = 'Signal hold complete';
-    }
-    if (typeof scenario.button_label !== 'string') {
-      scenario.button_label = '';
-    }
-  }
-  scenario.button_enabled = !!scenario.button_enabled;
-  if (!Array.isArray(scenario.steps)) {
-    scenario.steps = [];
-  }
-  if (scenario.steps.length === 0 && sig) {
-    const defaults = [];
-    if (sig.signal_topic) {
-      defaults.push(createMqttStep(sig.signal_topic, sig.signal_payload_on || ''));
-    }
-    if (sig.complete_track) {
-      defaults.push(createAudioStep(sig.complete_track));
-    }
-    if (sig.signal_on_ms > 0) {
-      defaults.push(createDelayStep(sig.signal_on_ms));
-    }
-    if (sig.signal_topic) {
-      defaults.push(createMqttStep(sig.signal_topic, sig.signal_payload_off || ''));
-    }
-    scenario.steps = defaults;
-  }
-}
+
 
 function ensureMqttTemplate(dev) {
   if (!dev || !dev.template || dev.template.type !== 'on_mqtt_event') {

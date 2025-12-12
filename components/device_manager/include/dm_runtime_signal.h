@@ -10,6 +10,7 @@ typedef struct {
 
 typedef struct {
     dm_signal_event_type_t event;
+    uint32_t accumulated_ms;
 
     bool audio_play;
     bool audio_pause;
@@ -26,3 +27,4 @@ typedef struct {
 void dm_signal_runtime_init(dm_signal_runtime_t *rt, const dm_signal_hold_template_t *tpl);
 void dm_signal_runtime_set_template(dm_signal_runtime_t *rt, const dm_signal_hold_template_t *tpl);
 dm_signal_action_t dm_signal_runtime_handle_tick(dm_signal_runtime_t *rt, uint64_t now_ms);
+dm_signal_action_t dm_signal_runtime_handle_timeout(dm_signal_runtime_t *rt);
