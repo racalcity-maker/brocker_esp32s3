@@ -555,7 +555,7 @@ static int send_pingresp(int sock)
 
 static int send_publish_packet(mqtt_session_t *sess, const char *topic, const char *payload, uint8_t qos, bool retain, uint16_t pid)
 {
-    if (!sess) {
+    if (!sess || !topic || !payload) {
         return -1;
     }
     size_t slot = session_index(sess);
@@ -566,11 +566,24 @@ static int send_publish_packet(mqtt_session_t *sess, const char *topic, const ch
     }
     size_t topic_len = strlen(topic);
     size_t payload_len = strlen(payload);
+    if (topic_len > UINT16_MAX) {
+        ESP_LOGW(TAG, "publish topic too long (%zu)", topic_len);
+        return -1;
+    }
     size_t rem_len = 2 + topic_len + payload_len + (qos ? 2 : 0);
+    if (rem_len > MQTT_MAX_PACKET) {
+        ESP_LOGW(TAG, "publish payload too large (%zu)", rem_len);
+        return -1;
+    }
 
     uint8_t header = 0x30 | (qos << 1) | (retain ? 0x01 : 0x00);
     uint8_t rem_enc[4];
     size_t rem_enc_len = encode_remaining_length(rem_enc, rem_len);
+    size_t total_len = 1 + rem_enc_len + rem_len;
+    if (rem_enc_len == 0 || total_len > MQTT_MAX_PACKET) {
+        ESP_LOGW(TAG, "publish packet exceeds buffer (topic=%zu payload=%zu total=%zu)", topic_len, payload_len, total_len);
+        return -1;
+    }
 
     size_t idx = 0;
     buf[idx++] = header;

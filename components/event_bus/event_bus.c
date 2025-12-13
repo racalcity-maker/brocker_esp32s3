@@ -5,7 +5,7 @@
 #include "freertos/task.h"
 #include "esp_log.h"
 
-#define EVENT_BUS_QUEUE_LEN 16
+#define EVENT_BUS_QUEUE_LEN 64
 #define EVENT_BUS_MAX_HANDLERS 8
 
 static const char *TAG = "event_bus";
@@ -13,6 +13,8 @@ static QueueHandle_t s_queue = NULL;
 static event_bus_handler_t s_handlers[EVENT_BUS_MAX_HANDLERS];
 static size_t s_handler_count = 0;
 static portMUX_TYPE s_handler_lock = portMUX_INITIALIZER_UNLOCKED;
+static uint32_t s_drop_count = 0;
+static uint32_t s_warned_drop = 0;
 
 static void event_bus_task(void *param)
 {
@@ -65,7 +67,15 @@ esp_err_t event_bus_post(const event_bus_message_t *message, TickType_t timeout)
     if (!message || !s_queue) {
         return ESP_ERR_INVALID_ARG;
     }
-    return xQueueSend(s_queue, message, timeout) == pdTRUE ? ESP_OK : ESP_ERR_TIMEOUT;
+    if (xQueueSend(s_queue, message, timeout) == pdTRUE) {
+        return ESP_OK;
+    }
+    uint32_t drops = ++s_drop_count;
+    if (drops == 1 || (drops % 50 == 0 && s_warned_drop < drops)) {
+        s_warned_drop = drops;
+        ESP_LOGW(TAG, "event bus queue full (drops=%" PRIu32 ")", drops);
+    }
+    return ESP_ERR_TIMEOUT;
 }
 
 esp_err_t event_bus_register_handler(event_bus_handler_t handler)
